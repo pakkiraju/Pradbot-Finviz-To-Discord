@@ -1,0 +1,18 @@
+{
+    "qulla_episodic":           "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "qulla_breakouts":          "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "qulla_parabolic_short":    "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_canslim":         "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_high_adr":        "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_extended_bases":  "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_1w20":            "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_4w30":            "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_4w50":            "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_13w50":           "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_26w100":          "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_ipo":             "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_high_short_float":"https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "jeff_sun_liquid_etfs":     "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "julian_komar_strongest":   "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "earnings_calendar_week":   "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
+}
