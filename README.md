@@ -1,37 +1,217 @@
 # PradBot-Finviz-To-Discord
 
-A Discord bot and webhook toolkit that brings FinViz data into your Discord server.
+This repository ships **two separate products** that live in the same folder and share some library code. You can use **either one**, or **both**; they do not depend on each other at runtime.
 
-## Features
+| Product | What it is | How it talks to Discord |
+|--------|------------|-------------------------|
+| **PradBot** | Long-running Discord **application** (`bot.py`) | Bot user + slash commands in channels |
+| **Scan webhook posters** | One-shot **CLI scripts** (`post_scans_elite.py` / `post_scans_free.py`) | Incoming webhooks per channel (URLs in `webhooks.json`) |
 
-### Discord Bot (`bot.py`)
+**Shared code (not a third product):** The Elite webhook script and PradBot’s **`/scans`** command both use the same pipeline: **`fetch_elite.fetch_scan`**, **`scan_registry`**, and **`discord_payload.build_embeds`**. PradBot does **not** execute `post_scans_elite.py`; it calls the same Python functions directly so tables match the Elite poster.
 
-A persistent Discord bot that responds to **slash commands** in real time. All commands use Discord's native `/` command system with autocomplete and dropdown menus.
+---
+
+## Product 1 — PradBot (`bot.py`)
+
+Interactive **slash-command** bot: charts, options, news, quotes, group screens, channel purge, and on-demand screener tables.
+
+### PradBot — command overview
 
 | Command | What it does |
 |---|---|
-| `/chart AAPL` | Posts a **daily** FinViz candlestick chart for AAPL |
-| `/chart MSFT Weekly` | Posts a **weekly** chart (timeframe dropdown: Daily, Weekly, Monthly) |
-| `/gex AAPL` | Posts **GEX analysis** for AAPL (nearest future expiry with gamma data) |
-| `/gex SPY 2025-07-18` | GEX for a **specific expiration date** |
-| `/zerodte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
-| `/news AAPL` | Latest **5 news articles** with clickable links |
-| `/quote AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
-| `/scans` | Pick **All scans** or **one preset** from a dropdown — same FinViz Elite CSV pipeline as `fetch_elite.py` / `post_scans_elite.py` |
-| `/purge` | Delete messages in the channel (count or **all**, with button confirmation for **all**) |
-| `/groups Sector` | **Sector** aggregate data (market cap, P/E, change, volume, etc.) |
-| `/groups Industry Valuation` | **Industry** data with a specific view preset (dropdown menus) |
+| `/chart AAPL` | **Daily** FinViz candlestick chart |
+| `/chart MSFT Weekly` | **Weekly** chart (timeframe dropdown: Daily, Weekly, Monthly) |
+| `/gex AAPL` | **GEX** (nearest future expiry or optional date) |
+| `/zerodte AAPL` | **0DTE** OI-style analysis |
+| `/news AAPL` | Latest **5** news links |
+| `/quote AAPL` | Chart + OHLCV + change + recent days + headlines |
+| `/scans` | **All scans** or **one** preset (FinViz Elite CSV + same embed style as Elite webhook poster) |
+| `/purge` | Delete messages (count or **all**, buttons for **all**) |
+| `/groups Sector` | Sector / industry / country / cap aggregates |
 
-Charts are fetched from FinViz Elite as full-size PNG images. `/gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `/zerodte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `/news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `/quote` posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed. `/scans` runs any preset from **Included Scans** on demand in the current channel (requires `FINVIZ_API_KEY` in `.env`), using the same `fetch_elite.fetch_scan` logic and embed formatting as the Elite webhook poster. Choose **All scans** to run every preset in sequence (with spacing between scans, like the Elite webhook script).
+Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`** only needs Discord permissions.
 
-### Webhook Posters
+### PradBot — setup
 
-Scheduled scripts that post FinViz screener scan results to Discord channels via webhooks. Each scan gets its own channel and webhook, and results are formatted as clean embedded tables. For ad-hoc runs without webhooks, use the bot’s **`/scans`** command instead.
+#### 1) Clone repo and install dependencies (if you have not already)
 
-- **Elite** (`post_scans_elite.py`) — Uses a FinViz Elite API key for fast, reliable CSV exports. Recommended if you have a paid FinViz subscription.
-- **Free** (`post_scans_free.py`) — Scrapes the public finviz.com screener pages using the [unofficial finviz Python API](https://github.com/mariostoev/finviz). No API key needed, but runs slower due to rate-limit-safe delays.
+```bash
+git clone <your-repo-url>
+cd "PradBot-Finviz-To-Discord"
+pip install -r requirements.txt
+```
 
-## Included Scans
+#### 2) Environment file for PradBot
+
+```bash
+cp .env.example .env
+```
+
+Put **both** in `.env`:
+
+- **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
+- **`FINVIZ_API_KEY`** — required for all FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`). Omit only if you truly only use `/purge` (the bot still needs the Discord token to start).
+
+#### 3) Discord application (you are the app owner)
+
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications) while logged into the account that should **own** the application.
+2. **Applications** → **New Application** → name it (e.g. `PradBot`) → **Create**.
+3. Left sidebar → **Bot** → **Reset Token** (or **Copy**) → paste into `.env` as `DISCORD_BOT_TOKEN`.
+
+> **Keep the token secret.** Reset it immediately if it leaks.
+
+#### 4) Invite PradBot to your **server (guild)** with Administrator
+
+PradBot is installed **per guild** using an OAuth2 invite URL (not the same thing as “webhook only”).
+
+1. In the Developer Portal, left sidebar → **OAuth2** → **URL Generator**.
+2. **Scopes:** enable **`bot`** and **`applications.commands`** (slash commands will not register without `applications.commands`).
+3. **Bot permissions:** enable **`Administrator`**. That covers posting embeds and files, reading history, **`/purge`** (Manage Messages), and avoids missing toggles as features grow.
+4. Copy the **generated URL**, open it in a browser, sign in as a Discord user who can **manage that server** (e.g. **Manage Server** or **Administrator** on the guild).
+5. Choose the **server** → **Authorize**. Approve **bot** and **application commands** access when Discord asks.
+
+After this, PradBot appears in the member list (offline until you run `bot.py`). You do **not** need **Message Content Intent** for these commands (slash + buttons).
+
+#### 5) Slash command sync
+
+On startup, `bot.py` calls global **`tree.sync()`**. Brand-new or changed commands can take **up to ~1 hour** to appear everywhere; later updates are usually faster.
+
+#### 6) Run PradBot
+
+```bash
+python bot.py
+```
+
+You should see `Logged in as …` in the console.
+
+### PradBot — slash reference (detail)
+
+All commands use `/`. Dropdown parameters are shown in **bold**.
+
+| Command | Description |
+|---|---|
+| `/chart <symbol> [timeframe]` | FinViz chart (**timeframe:** Daily, Weekly, Monthly) |
+| `/gex <symbol> [expiry]` | GEX / options (optional YYYY-MM-DD) |
+| `/zerodte <symbol>` | 0DTE analysis |
+| `/news <symbol>` | 5 articles with links |
+| `/quote <symbol>` | Quote panel + chart + news |
+| `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
+| `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
+| `/groups <group> [preset]` | Groups export (**group** / **preset** dropdowns) |
+
+**Examples:**
+
+```
+/chart symbol:AAPL
+/chart symbol:MSFT timeframe:Weekly
+/gex symbol:AAPL
+/zerodte symbol:SPY
+/news symbol:TSLA
+/quote symbol:MSFT
+/purge amount:10
+/purge amount:all
+/scans scan:all
+/scans scan:jeff_sun_canslim
+/groups group:Sector
+/groups group:Industry preset:Valuation
+```
+
+**What `/scans` does:** Uses **`fetch_elite.fetch_scan`** and **`discord_payload.build_embeds`** — the **same building blocks** as **`post_scans_elite.py`**, but posts into the channel via the bot. **All scans** sends many messages over several minutes.
+
+**What `/gex` shows:** Net GEX, call/put walls, gamma flip, P/C ratio, top strikes (OI fallback if no gamma).
+
+**What `/zerodte` shows:** Call/put OI walls, P/C, total OI, top strikes.
+
+**What `/news` / `/quote` / `/groups` show:** As before (headlines, combined panel, group tables / CSV when large).
+
+---
+
+## Product 2 — Scan webhook posters (`post_scans_elite.py` / `post_scans_free.py`)
+
+Separate **batch programs**: no bot token. You configure **Discord incoming webhook URLs** in JSON, run the script (or schedule it), and each configured scan posts to its webhook channel.
+
+- **`post_scans_elite.py`** — FinViz Elite CSV exports; needs **`FINVIZ_API_KEY`** in `.env`.
+- **`post_scans_free.py`** — Scrapes public FinViz HTML via [mariostoev/finviz](https://github.com/mariostoev/finviz); **no** API key; slower, rate-limit friendly.
+
+These scripts **do not** start PradBot and **do not** require `DISCORD_BOT_TOKEN`.
+
+### Webhook posters — setup
+
+#### 1) Same clone / `pip install` as above (one venv is fine)
+
+#### 2) Create webhooks in Discord
+
+Server **Settings** → **Integrations** → **Webhooks** → **New Webhook** per target channel → copy each URL.
+
+#### 3) `webhooks.json`
+
+```bash
+cp webhooks.example.json webhooks.json
+```
+
+Map **scan IDs** (see **Included Scans** below) to URLs:
+
+```json
+{
+    "qulla_episodic": "https://discord.com/api/webhooks/1234567890/abcdef...",
+    "jeff_sun_canslim": "https://discord.com/api/webhooks/1234567890/ghijkl..."
+}
+```
+
+Only listed IDs run. **`webhooks.json`** is gitignored.
+
+#### 4) `.env` for Elite poster only
+
+For **`post_scans_elite.py`**, set **`FINVIZ_API_KEY`** in `.env`. The free poster does not need it.
+
+### Webhook posters — run
+
+```bash
+python post_scans_elite.py
+# or
+python post_scans_free.py
+```
+
+### Webhook posters — CLI flags
+
+| Flag | Description |
+|---|---|
+| `--config PATH` | Webhooks JSON (default: `webhooks.json`) |
+| `--dry-run` | Fetch and build embeds; do not POST |
+| `--verbose` / `-v` | Debug logging |
+
+```bash
+python post_scans_free.py --dry-run --verbose
+python post_scans_elite.py --config my_webhooks.json
+```
+
+### Webhook posters — scheduling
+
+Scripts exit after one run. Use Task Scheduler, cron, etc.:
+
+**Windows:** Task → run `python post_scans_elite.py` (or `post_scans_free.py`) with **Start in** = this folder.
+
+**Linux/macOS:**
+
+```bash
+30 16 * * 1-5 cd /path/to/PradBot-Finviz-To-Discord && python post_scans_elite.py
+```
+
+### Free vs Elite (webhook posters)
+
+| | Free | Elite |
+|---|---|---|
+| **API key** | No | Yes (Elite) |
+| **Source** | HTML scrape | `elite.finviz.com` CSV |
+| **Speed** | ~3–5 min all scans | ~30–60 sec typical |
+| **Rate limits** | Aggressive delays + retries | Milder (`FINVIZ_ELITE_DELAY_SEC`) |
+| **`tad_*` filters** | Stripped | Full |
+
+---
+
+## Included Scans (shared IDs)
+
+Used as keys in **`webhooks.json`** and as **`/scans`** choices (except the synthetic **All scans** option).
 
 | Scan ID | Name |
 |---|---|
@@ -52,315 +232,68 @@ Scheduled scripts that post FinViz screener scan results to Discord channels via
 | `julian_komar_strongest` | Julian Komar — Strongest Stocks |
 | `earnings_calendar_week` | Earnings Calendar — This Week |
 
-Each scan is sorted by daily change % (descending) and capped at the top 50 results.
+Each scan is sorted by daily change % (descending) and capped at **50** tickers.
 
-## Setup
+---
 
-### 1. Clone and install dependencies
-
-```bash
-git clone <your-repo-url>
-cd "PradBot-Finviz-To-Discord"
-pip install -r requirements.txt
-```
-
-### 2. Create Discord webhooks
-
-For each scan you want to post, create a webhook in your Discord server:
-
-1. Open your Discord server settings.
-2. Go to **Integrations > Webhooks**.
-3. Click **New Webhook**, pick the target channel, and copy the webhook URL.
-4. Repeat for each scan/channel you want.
-
-### 3. Configure webhooks.json
-
-Copy the example file and fill in your webhook URLs:
-
-```bash
-cp webhooks.example.json webhooks.json
-```
-
-Open `webhooks.json` and replace the placeholder URLs with your real webhook URLs:
-
-```json
-{
-    "qulla_episodic":       "https://discord.com/api/webhooks/1234567890/abcdef...",
-    "jeff_sun_canslim":     "https://discord.com/api/webhooks/1234567890/ghijkl...",
-    "earnings_calendar_week": "https://discord.com/api/webhooks/1234567890/mnopqr..."
-}
-```
-
-You only need to include the scans you want. Any scan ID not present in `webhooks.json` will be skipped.
-
-### 4. Configure `.env` (FinViz Elite API key)
-
-Copy the example and add your FinViz Elite API key if you use **`post_scans_elite.py`** or any FinViz-backed **`bot.py`** commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`):
-
-```bash
-cp .env.example .env
-```
-
-Open `.env` and set:
-
-```
-FINVIZ_API_KEY=your_finviz_elite_api_key_here
-```
-
-The **free** webhook script (`post_scans_free.py` only) does not need `FINVIZ_API_KEY`. The Discord bot still needs **`DISCORD_BOT_TOKEN`** (see step 5b); put both variables in the same `.env` when you run `bot.py`.
-
-### 5. Create a Discord bot application and get the token
-
-Follow these steps to create the bot that will respond to `/chart`, `/gex`, `/zerodte`, `/news`, `/scans`, and other slash commands.
-
-#### 5a. Create the application
-
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Click **New Application** in the top-right corner.
-3. Give it a name (e.g. `PradBot`) and click **Create**.
-
-#### 5b. Get the bot token
-
-1. In the left sidebar, click **Bot**.
-2. Click **Reset Token** (or **Copy** if this is a fresh app) to reveal the bot token.
-3. Copy the token and paste it into your `.env` file:
-
-```
-DISCORD_BOT_TOKEN=paste_your_token_here
-```
-
-> **Keep this token secret.** Anyone with the token can control your bot. If it leaks, click **Reset Token** immediately to generate a new one.
-
-#### 5c. Invite the bot with full server access
-
-Use one invite that grants the bot everything it needs (charts, embeds, `/purge`, channel tools, slash commands):
-
-1. In the left sidebar, click **OAuth2 > URL Generator**.
-2. Under **Scopes**, check **`bot`** and **`applications.commands`** (required for slash commands).
-3. Under **Bot Permissions**, enable **Administrator**. That single toggle covers posting charts and embeds, reading history, managing messages for `/purge`, and all other bot features without micromanaging individual checkboxes.
-4. Copy the generated URL at the bottom and open it in your browser.
-5. Pick your server and click **Authorize**. Discord may ask you to confirm **bot** and **application commands** access for that server — approve both so `/` commands register and autocomplete.
-
-The bot will appear in your member list (offline until you start `bot.py`).
-
-> **Note:** The bot does not need the **Message Content Intent** (slash commands and `/purge all` button confirmations do not require reading normal message text).
-
-#### 5d. Slash command sync
-
-When `bot.py` starts, it registers slash commands **globally**. The first time you add or change commands, Discord can take **up to about an hour** for them to show up in every server; after that, updates are usually quick. If `/` commands already appear and autocomplete, you are set.
-
-## Usage
-
-### Free version (no API key)
-
-```bash
-python post_scans_free.py
-```
-
-### Elite version (requires FinViz Elite API key)
-
-```bash
-python post_scans_elite.py
-```
-
-### Discord bot
-
-```bash
-python bot.py
-```
-
-The bot connects to Discord and stays running, listening for slash commands in any text channel it has access to. You should see `Logged in as PradBot#1234` in the console when it's ready.
-
-**Environment:** `DISCORD_BOT_TOKEN` is required. `FINVIZ_API_KEY` is required for FinViz-backed commands (everything except `/purge`). Without the FinViz key, `/scans` replies with a setup hint.
-
-#### Bot commands
-
-All commands use Discord's `/` slash command system. Parameters with dropdowns are shown in **bold**.
-
-| Command | Description |
-|---|---|
-| `/chart <symbol> [timeframe]` | Post a FinViz candlestick chart (**timeframe** dropdown: Daily, Weekly, Monthly) |
-| `/gex <symbol> [expiry]` | GEX / options analysis for nearest future expiry (or specific YYYY-MM-DD) |
-| `/zerodte <symbol>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
-| `/news <symbol>` | Latest 5 news articles with clickable links, dates, and sources |
-| `/quote <symbol>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
-| `/purge <amount>` | Delete messages in the channel (number or **all**; **all** uses **Yes / Cancel** buttons to confirm; requires Manage Messages) |
-| `/scans <scan>` | Run **All scans** (every preset) or **one** FinViz Elite screener (**scan** dropdown: first option is all presets; rest match **Included Scans**; requires `FINVIZ_API_KEY`) |
-| `/groups <group> [preset]` | Group screener data (**group** dropdown: Sector, Industry, Country, Market Cap; **preset** dropdown: Custom, Overview, Valuation, Performance) |
-
-**Examples:**
-
-```
-/chart symbol:AAPL
-/chart symbol:MSFT timeframe:Weekly
-/chart symbol:TSLA timeframe:Monthly
-/gex symbol:AAPL
-/gex symbol:SPY expiry:2025-07-18
-/zerodte symbol:AAPL
-/zerodte symbol:SPY
-/news symbol:AAPL
-/news symbol:TSLA
-/quote symbol:MSFT
-/quote symbol:AAPL
-/purge amount:10
-/purge amount:all
-/scans scan:all
-/scans scan:jeff_sun_canslim
-/scans scan:qulla_episodic
-/groups group:Sector
-/groups group:Industry preset:Valuation
-/groups group:Country preset:Performance
-/groups group:Market Cap preset:Overview
-```
-
-The bot replies with an embedded image (charts) or an embed with analysis fields (options). `/quote` posts a combined panel with chart, price data, and news in one message. `/scans` posts the same style of monospace result table as the Elite webhook scripts (large results may split across multiple messages). **All scans** posts one intro line, then each preset’s table(s), then a short completion line — expect many messages and several minutes. `/groups` posts aggregate metrics for sectors, industries, countries, or market cap tiers with dropdown selection. If the symbol is invalid or data can't be fetched, the bot replies with an ephemeral error message (only visible to you).
-
-**What `/gex` shows:**
-- **Net GEX** — total dealer gamma exposure across all strikes.
-- **Call Wall** — strike with the largest positive gamma exposure (resistance).
-- **Put Wall** — strike with the largest negative gamma exposure (support).
-- **Gamma Flip** — strike where cumulative GEX crosses zero (trend inflection point).
-- **P/C Ratio** — put-to-call open interest ratio.
-- **Top Strikes** — table of the most significant strikes by GEX magnitude.
-
-If gamma data is not available in the Finviz export, the bot falls back to **OI-based walls** and labels them accordingly.
-
-**What `/zerodte` shows:**
-- **Call OI Wall** — strike with the highest call open interest (resistance).
-- **Put OI Wall** — strike with the highest put open interest (support).
-- **P/C Ratio** — put-to-call open interest ratio.
-- **Total OI** — total call and put open interest.
-- **Top Strikes** — table of the most significant strikes by open interest.
-
-Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather than GEX.
-
-**What `/news` shows:**
-- The **5 most recent** news articles related to the ticker.
-- Each article is a **clickable link** that opens directly in your browser.
-- **Date** and **source** (e.g. Reuters, Bloomberg) are shown for each article.
-
-**What `/quote` shows (quick quote panel):**
-- **Daily chart** — full-size candlestick chart from FinViz Elite.
-- **Last close** with daily change (dollar and percent) in the title.
-- **OHLCV** — open, high, low, volume for the latest bar.
-- **Recent Days** — 5-day OHLCV history table.
-- **Latest News** — 3 most recent headlines as clickable links.
-
-This combines `/chart`, price data, and `/news` into a single response.
-
-**What `/scans` shows:**
-- The same **top 50 tickers** (by daily change %) as `post_scans_elite.py`, for the scan you pick — ticker, price, change %, volume, relative volume, with an optional **View on FinViz** link on the first embed.
-- **All scans** runs the full **Included Scans** list in registry order, with a brief pause between presets (same idea as spacing in `post_scans_elite.py`). Pick a single preset when you only want one table.
-- Scan IDs match the **Included Scans** table and `webhooks.json` keys (e.g. `jeff_sun_canslim`, `earnings_calendar_week`). In Discord, choose **All scans (every preset)** at the top of the dropdown (examples below use `scan:all` for the same option).
-
-**What `/groups` shows:**
-- Aggregate metrics for groups of stocks organized by **sector**, **industry**, **country**, or **market cap** tier.
-- Available view presets (selectable via dropdown) control which columns are returned:
-  - `Overview` — stocks, market cap, dividend yield, P/E, forward P/E, PEG, debt ratios, analyst recom, change, volume.
-  - `Valuation` — market cap, P/E, forward P/E, PEG, P/S, P/B, P/C, P/FCF, EPS growth, sales growth, change, volume.
-  - `Performance` — weekly/monthly/quarterly/half-year/yearly/YTD performance, avg volume, relative volume, change, volume.
-  - `Custom` (default) — market cap, P/E, dividend yield, avg volume, change, volume, stocks.
-- Small groups (e.g. sector with ~11 rows) are displayed inline as a monospace table. Large groups (e.g. industry with ~140+ rows) include a preview table and attach the full data as a CSV file.
-
-### Options (webhook scripts)
-
-Both scripts accept the same flags:
-
-| Flag | Description |
-|---|---|
-| `--config PATH` | Path to webhooks JSON file (default: `webhooks.json` in the script's folder) |
-| `--dry-run` | Fetch data and build embeds, but don't actually post to Discord |
-| `--verbose` / `-v` | Enable debug-level logging |
-
-Examples:
-
-```bash
-# Dry run to verify everything works without posting
-python post_scans_free.py --dry-run --verbose
-
-# Use a custom webhooks file
-python post_scans_elite.py --config my_webhooks.json
-
-# Verbose output for troubleshooting
-python post_scans_free.py -v
-```
-
-## Scheduling (optional)
-
-The scripts run once and exit. To post daily, set up a scheduler:
-
-**Windows Task Scheduler:**
-1. Open Task Scheduler and create a new task.
-2. Set the trigger to your preferred time (e.g. 4:30 PM ET on weekdays).
-3. Set the action to run `python post_scans_free.py` (or `post_scans_elite.py`) with the working directory set to this folder.
-
-**Linux/macOS cron:**
-
-```bash
-# Post at 4:30 PM ET every weekday (adjust timezone as needed)
-30 16 * * 1-5 cd /path/to/PradBot-Finviz-To-Discord && python post_scans_free.py
-```
-
-## Free vs Elite: Differences
-
-| | Free | Elite |
-|---|---|---|
-| **API key required** | No | Yes (FinViz Elite subscription) |
-| **Data source** | Scrapes finviz.com HTML pages | Direct CSV export from elite.finviz.com |
-| **Speed** | ~3-5 min for all 16 scans | ~30-60 sec for all 16 scans |
-| **Rate limiting** | Aggressive (8s+ between scans, retries with backoff) | Mild (1.5s between scans) |
-| **Elite-only filters** | `tad_*` custom filters are stripped; results may differ slightly | Full filter support |
-| **Reliability** | May break if FinViz changes their HTML layout | Stable CSV format |
-
-## File Structure
+## File structure (by product)
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (slash commands: /chart, /gex, /zerodte, /news, /quote, /scans, /groups, /purge)
-  finviz_chart.py        # Fetches chart images from FinViz Elite
-  finviz_groups.py       # Fetches group screener data from FinViz Elite groups export
-  finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
-  finviz_news.py         # Fetches news articles from FinViz Elite news export
-  finviz_quote.py        # Fetches OHLCV quote history from FinViz Elite quote export
-  gex_compute.py         # Computes GEX metrics (walls, gamma flip, net GEX)
-  post_scans_elite.py    # Webhook poster — Elite version
-  post_scans_free.py     # Webhook poster — Free version
-  scan_registry.py       # All scan definitions (IDs, titles, URLs)
-  fetch_elite.py         # Fetches scan data via FinViz Elite CSV export
-  fetch_free.py          # Fetches scan data via finviz Python library (HTML scraping)
-  discord_payload.py     # Builds Discord embeds and posts to webhooks
-  webhooks.example.json  # Template — copy to webhooks.json
-  .env.example           # Template — copy to .env
-  .gitignore             # Excludes webhooks.json, .env, __pycache__
-  requirements.txt       # Python dependencies
+
+  # PradBot
+  bot.py                 # PradBot entry (slash commands)
+
+  # Webhook posters
+  post_scans_elite.py
+  post_scans_free.py
+  webhooks.example.json  # Copy → webhooks.json (webhook product only)
+
+  # Shared by /scans and post_scans_elite
+  scan_registry.py
+  fetch_elite.py
+  discord_payload.py
+
+  # PradBot + Elite poster helpers
+  finviz_chart.py
+  finviz_groups.py
+  finviz_options.py
+  finviz_news.py
+  finviz_quote.py
+  gex_compute.py
+
+  # Free webhook poster only
+  fetch_free.py
+
+  .env.example
+  .gitignore
+  requirements.txt
 ```
+
+---
 
 ## Troubleshooting
 
-**"Webhook config not found"** — You need to create `webhooks.json`. Copy `webhooks.example.json` and fill in your URLs.
+**Webhook posters — "Webhook config not found"** — Create `webhooks.json` from `webhooks.example.json`.
 
-**"No valid webhook URLs found"** — Your `webhooks.json` has placeholder URLs. Replace them with real Discord webhook URLs starting with `https://discord.com/api/webhooks/...`.
+**Webhook posters — "No valid webhook URLs"** — Use real `https://discord.com/api/webhooks/...` URLs.
 
-**429 rate limit errors (free version)** — Free FinViz rate-limits aggressively. The script retries automatically with exponential backoff. You can increase the delay between requests by setting `FINVIZ_FREE_DELAY_SEC` in your environment (default is 5 seconds).
+**Webhook posters — 429 (free)** — Increase `FINVIZ_FREE_DELAY_SEC` if needed.
 
-**"No results for this scan"** — Some scans may legitimately return zero results on a given day depending on market conditions. This is normal.
+**PradBot — slash commands missing** — Wait for global sync (~up to 1 hour first time); restart `bot.py`; invite must include **`applications.commands`**.
 
-**Discord 400 Bad Request** — Usually means the embed payload is too large. Each scan is capped at 50 results and embeds are sent one at a time to stay within Discord's limits, so this should be rare.
+**PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
 
-**Slash commands not showing up** — Wait up to about an hour after the first sync, restart `bot.py`, and confirm the invite included **`applications.commands`** (OAuth2 URL Generator) and that the bot is still in the server. Re-authorize the invite URL if you add new scopes later.
+**PradBot — chart / FinViz errors** — Confirm Elite subscription and `FINVIZ_API_KEY`.
 
-**`/scans` says to set `FINVIZ_API_KEY`** — Add your Elite API key to `.env` in the project folder (same file as `DISCORD_BOT_TOKEN`). The bot loads `.env` on startup.
+**"No results for this scan"** — Normal on some days for some screens.
 
-**"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
+**Discord 400 (embed too large)** — Rare; scans cap at 50 rows; large tables split.
 
-**"No options data returned"** — The symbol may not have listed options, or the specific expiry date you entered doesn't exist for that ticker. Try without a date (`/gex AAPL`) to auto-select the nearest future expiry. The bot fetches all available expirations from the Finviz Elite export and picks the closest one after today.
+**"Gamma data not available"** — Try a further expiry on `/gex`.
 
-**"No 0DTE options data"** — The symbol doesn't have options expiring today. Not every ticker has daily expirations — most only have weekly or monthly. Try `/gex SYMBOL` instead to see the nearest available expiry.
-
-**"No news found"** — The symbol may not have any recent news articles in the FinViz database, or the API key may be invalid. Verify your `FINVIZ_API_KEY` is correct and the Elite subscription is active.
-
-**"Gamma data not available"** — The Finviz options export didn't include gamma values for the selected expiry (common for 0DTE or very near-term expirations). The bot will show OI-based walls instead. If you want gamma-based GEX, try a further-out expiry (e.g. `/gex AAPL 2025-07-18`).
+---
 
 ## License
 
-This project uses data from [FinViz](https://finviz.com). Please review their [Terms of Service](https://finviz.com/terms.ashx) before use. The unofficial `finviz` Python library used by the free version is maintained at [mariostoev/finviz](https://github.com/mariostoev/finviz).
+Data from [FinViz](https://finviz.com) — see their [Terms of Service](https://finviz.com/terms.ashx). Free scraping uses [mariostoev/finviz](https://github.com/mariostoev/finviz).
