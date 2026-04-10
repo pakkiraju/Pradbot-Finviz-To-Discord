@@ -1,7 +1,8 @@
-"""PradBot — Discord bot for Finviz charts and more.
+"""PradBot — Discord bot for Finviz charts and more (slash commands).
 
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
+Optional: GUILD_ID for instant guild-scoped command sync during development.
 """
 
 import asyncio
@@ -15,7 +16,7 @@ from datetime import date
 from pathlib import Path
 
 import discord
-from discord.ext import commands
+from discord import app_commands
 
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
 from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
@@ -60,72 +61,56 @@ if not DISCORD_BOT_TOKEN:
 # Bot setup
 # ---------------------------------------------------------------------------
 intents = discord.Intents.default()
-intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-_TICKER_RE = re.compile(r"^!([A-Za-z][A-Za-z0-9.]{0,9})$")
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 
 
 @bot.event
 async def on_ready():
+    guild_id = os.environ.get("GUILD_ID", "").strip()
+    if guild_id:
+        guild = discord.Object(id=int(guild_id))
+        tree.copy_global_to(guild=guild)
+        await tree.sync(guild=guild)
+        logger.info("Synced slash commands to guild %s", guild_id)
+    else:
+        await tree.sync()
+        logger.info("Synced slash commands globally (may take up to 1 hour)")
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
-
-    text = message.content.strip()
-    m = _TICKER_RE.match(text)
-
-    if m:
-        token = m.group(1).lower()
-        # Let registered commands through normally
-        if token not in {cmd.name for cmd in bot.commands}:
-            ticker = validate_symbol(m.group(1))
-            if ticker:
-                await _handle_ticker_quote(message, ticker)
-                return
-
-    await bot.process_commands(message)
-
-
 # ---------------------------------------------------------------------------
-# !chart command
+# /chart
 # ---------------------------------------------------------------------------
 
-@bot.command(name="chart")
-async def chart_command(ctx: commands.Context, symbol: str | None = None, timeframe: str = "d"):
-    """Post a FinViz chart for a ticker.
+_TIMEFRAME_CHOICES = [
+    app_commands.Choice(name="Daily", value="d"),
+    app_commands.Choice(name="Weekly", value="w"),
+    app_commands.Choice(name="Monthly", value="m"),
+]
 
-    Usage:
-        !chart AAPL          — daily chart
-        !chart MSFT w        — weekly chart
-        !chart TSLA m        — monthly chart
-    """
-    if symbol is None:
-        await ctx.reply("Usage: `!chart <SYMBOL> [d|w|m]`\nExample: `!chart AAPL w`")
-        return
 
+@tree.command(name="chart", description="Post a FinViz candlestick chart for a ticker")
+@app_commands.describe(
+    symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)",
+    timeframe="Chart timeframe",
+)
+@app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+async def chart_command(interaction: discord.Interaction, symbol: str, timeframe: app_commands.Choice[str] | None = None):
     ticker = validate_symbol(symbol)
     if ticker is None:
-        await ctx.reply(f"`{symbol}` doesn't look like a valid ticker symbol.")
+        await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
         return
 
-    tf = timeframe.lower()
-    if tf not in TIMEFRAMES:
-        await ctx.reply(f"Unknown timeframe `{timeframe}`. Use `d` (daily), `w` (weekly), or `m` (monthly).")
-        return
-
+    tf = timeframe.value if timeframe else "d"
     tf_label = {"d": "Daily", "w": "Weekly", "m": "Monthly"}[tf]
-    async with ctx.typing():
-        data = await asyncio.to_thread(fetch_chart, ticker, tf)
+
+    await interaction.response.defer()
+    data = await asyncio.to_thread(fetch_chart, ticker, tf)
 
     if data is None:
-        await ctx.reply(f"Could not fetch chart for **{ticker}**. Check the logs for details.")
+        await interaction.followup.send(f"Could not fetch chart for **{ticker}**. Check the logs for details.")
         return
 
     filename = f"{ticker}_{tf_label.lower()}.png"
@@ -139,28 +124,14 @@ async def chart_command(ctx: commands.Context, symbol: str | None = None, timefr
     embed.set_image(url=f"attachment://{filename}")
     embed.set_footer(text="Data from FinViz")
 
-    await ctx.reply(embed=embed, file=file)
+    await interaction.followup.send(embed=embed, file=file)
 
 
 # ---------------------------------------------------------------------------
-# Error handling
-# ---------------------------------------------------------------------------
-
-@chart_command.error
-async def chart_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply("Usage: `!chart <SYMBOL> [d|w|m]`\nExample: `!chart AAPL`")
-    else:
-        logger.exception("Unhandled error in !chart: %s", error)
-        await ctx.reply("Something went wrong. Please try again later.")
-
-
-# ---------------------------------------------------------------------------
-# !gex command
+# GEX helpers (shared by /gex and /zerodte)
 # ---------------------------------------------------------------------------
 
 def _fmt_gex(value: float) -> str:
-    """Format a GEX value into a readable string with K/M suffix."""
     abs_v = abs(value)
     sign = "-" if value < 0 else ""
     if abs_v >= 1_000_000:
@@ -171,12 +142,10 @@ def _fmt_gex(value: float) -> str:
 
 
 def _fmt_oi(value: float) -> str:
-    """Format an OI count with comma separators."""
     return f"{int(value):,}"
 
 
 def _build_gex_embed(summary) -> discord.Embed:
-    """Build a Discord embed from a GexSummary."""
     title = f"{summary.symbol} — GEX" if summary.has_gamma else f"{summary.symbol} — OI Analysis"
     embed = discord.Embed(
         title=title,
@@ -208,7 +177,6 @@ def _build_gex_embed(summary) -> discord.Embed:
         if summary.put_wall is not None:
             embed.add_field(name="Put OI Wall", value=f"${summary.put_wall:,.2f}  ({_fmt_oi(summary.put_wall_value)} OI)", inline=True)
 
-    # Top strikes table
     if summary.top_strikes:
         header = "Strike     | Call OI  | Put OI   |"
         if summary.has_gamma:
@@ -226,7 +194,6 @@ def _build_gex_embed(summary) -> discord.Embed:
                 )
 
         table = "\n".join(lines)
-        # Discord field value max is 1024 chars; truncate if needed
         if len(table) > 1000:
             table = table[:997] + "..."
         label = "Top Strikes by GEX" if summary.has_gamma else "Top Strikes by OI"
@@ -243,86 +210,69 @@ def _build_gex_embed(summary) -> discord.Embed:
     return embed
 
 
-@bot.command(name="gex")
-async def gex_command(ctx: commands.Context, symbol: str | None = None, expiry: str | None = None):
-    """Post GEX / options analysis for a ticker.
+# ---------------------------------------------------------------------------
+# /gex
+# ---------------------------------------------------------------------------
 
-    Usage:
-        !gex AAPL               — nearest expiry
-        !gex AAPL 2025-07-18    — specific expiry
-    """
-    if symbol is None:
-        await ctx.reply("Usage: `!gex <SYMBOL> [YYYY-MM-DD]`\nExample: `!gex AAPL` or `!gex SPY 2025-07-18`")
-        return
-
+@tree.command(name="gex", description="GEX / options analysis for a ticker (nearest future expiry)")
+@app_commands.describe(
+    symbol="Ticker symbol (e.g. AAPL, SPY)",
+    expiry="Specific expiry date in YYYY-MM-DD format (optional)",
+)
+async def gex_command(interaction: discord.Interaction, symbol: str, expiry: str | None = None):
     ticker = validate_symbol(symbol)
     if ticker is None:
-        await ctx.reply(f"`{symbol}` doesn't look like a valid ticker symbol.")
+        await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
         return
 
-    if expiry is not None:
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry):
-            await ctx.reply(f"Invalid date format `{expiry}`. Use `YYYY-MM-DD` (e.g. `2025-07-18`).")
-            return
+    if expiry is not None and not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry):
+        await interaction.response.send_message(
+            f"Invalid date format `{expiry}`. Use `YYYY-MM-DD` (e.g. `2025-07-18`).",
+            ephemeral=True,
+        )
+        return
 
-    async with ctx.typing():
-        rows = await asyncio.to_thread(fetch_options, ticker, expiry)
+    await interaction.response.defer()
+    rows = await asyncio.to_thread(fetch_options, ticker, expiry)
 
     if not rows:
         msg = f"No options data returned for **{ticker}**"
         if expiry:
             msg += f" (expiry {expiry})"
         msg += ". Check that the symbol has listed options and the expiry date is valid."
-        await ctx.reply(msg)
+        await interaction.followup.send(msg)
         return
 
     used_expiry = expiry or rows[0].expiry or "unknown"
     summary = compute_gex(ticker, used_expiry, rows)
 
     if summary is None:
-        await ctx.reply(f"Could not compute GEX for **{ticker}**. No valid strike data found.")
+        await interaction.followup.send(f"Could not compute GEX for **{ticker}**. No valid strike data found.")
         return
 
     embed = _build_gex_embed(summary)
-    await ctx.reply(embed=embed)
-
-
-@gex_command.error
-async def gex_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply("Usage: `!gex <SYMBOL> [YYYY-MM-DD]`\nExample: `!gex AAPL`")
-    else:
-        logger.exception("Unhandled error in !gex: %s", error)
-        await ctx.reply("Something went wrong. Please try again later.")
+    await interaction.followup.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------
-# !0dte command
+# /zerodte
 # ---------------------------------------------------------------------------
 
-@bot.command(name="0dte")
-async def zero_dte_command(ctx: commands.Context, symbol: str | None = None):
-    """Post 0DTE options analysis (OI walls, volume, P/C ratio) for a ticker.
-
-    Usage:
-        !0dte AAPL
-    """
-    if symbol is None:
-        await ctx.reply("Usage: `!0dte <SYMBOL>`\nExample: `!0dte AAPL`")
-        return
-
+@tree.command(name="zerodte", description="0DTE options analysis (OI walls, volume, P/C ratio)")
+@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, SPY)")
+async def zerodte_command(interaction: discord.Interaction, symbol: str):
     ticker = validate_symbol(symbol)
     if ticker is None:
-        await ctx.reply(f"`{symbol}` doesn't look like a valid ticker symbol.")
+        await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
         return
 
     today = date.today().isoformat()
 
-    async with ctx.typing():
-        rows = await asyncio.to_thread(fetch_options, ticker, today)
+    await interaction.response.defer()
+    rows = await asyncio.to_thread(fetch_options, ticker, today)
 
     if not rows:
-        await ctx.reply(
+        await interaction.followup.send(
             f"No 0DTE options data for **{ticker}** today ({today}). "
             "The symbol may not have options expiring today."
         )
@@ -330,49 +280,32 @@ async def zero_dte_command(ctx: commands.Context, symbol: str | None = None):
 
     summary = compute_gex(ticker, today, rows)
     if summary is None:
-        await ctx.reply(f"Could not compute 0DTE analysis for **{ticker}**. No valid strike data found.")
+        await interaction.followup.send(f"Could not compute 0DTE analysis for **{ticker}**. No valid strike data found.")
         return
 
     embed = _build_gex_embed(summary)
     embed.title = f"{ticker} — 0DTE Analysis"
     embed.color = 0xE67E22
-    await ctx.reply(embed=embed)
-
-
-@zero_dte_command.error
-async def zero_dte_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply("Usage: `!0dte <SYMBOL>`\nExample: `!0dte AAPL`")
-    else:
-        logger.exception("Unhandled error in !0dte: %s", error)
-        await ctx.reply("Something went wrong. Please try again later.")
+    await interaction.followup.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------
-# !news command
+# /news
 # ---------------------------------------------------------------------------
 
-@bot.command(name="news")
-async def news_command(ctx: commands.Context, symbol: str | None = None):
-    """Post the latest news articles for a ticker.
-
-    Usage:
-        !news AAPL
-    """
-    if symbol is None:
-        await ctx.reply("Usage: `!news <SYMBOL>`\nExample: `!news AAPL`")
-        return
-
+@tree.command(name="news", description="Latest news articles for a ticker")
+@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, TSLA)")
+async def news_command(interaction: discord.Interaction, symbol: str):
     ticker = validate_symbol(symbol)
     if ticker is None:
-        await ctx.reply(f"`{symbol}` doesn't look like a valid ticker symbol.")
+        await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
         return
 
-    async with ctx.typing():
-        articles = await asyncio.to_thread(fetch_news, ticker, 5)
+    await interaction.response.defer()
+    articles = await asyncio.to_thread(fetch_news, ticker, 5)
 
     if not articles:
-        await ctx.reply(f"No news found for **{ticker}**.")
+        await interaction.followup.send(f"No news found for **{ticker}**.")
         return
 
     embed = discord.Embed(
@@ -391,103 +324,102 @@ async def news_command(ctx: commands.Context, symbol: str | None = None):
         )
 
     embed.set_footer(text="Data from FinViz Elite")
-    await ctx.reply(embed=embed)
-
-
-@news_command.error
-async def news_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply("Usage: `!news <SYMBOL>`\nExample: `!news AAPL`")
-    else:
-        logger.exception("Unhandled error in !news: %s", error)
-        await ctx.reply("Something went wrong. Please try again later.")
+    await interaction.followup.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------
-# !purge command
+# /purge
 # ---------------------------------------------------------------------------
 
-@bot.command(name="purge")
-@commands.has_permissions(manage_messages=True)
-@commands.bot_has_permissions(manage_messages=True, read_message_history=True)
-async def purge_command(ctx: commands.Context, amount: str | None = None):
-    """Delete messages from the current channel.
+@tree.command(name="purge", description="Delete messages from the current channel")
+@app_commands.describe(amount='Number of messages to delete, or "all"')
+@app_commands.default_permissions(manage_messages=True)
+async def purge_command(interaction: discord.Interaction, amount: str):
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message("This command can only be used in text channels.", ephemeral=True)
+        return
 
-    Usage:
-        !purge 10       — delete the last 10 messages
-        !purge all       — delete ALL messages in the channel
-    """
-    if amount is None:
-        await ctx.reply("Usage: `!purge <number|all>`\nExample: `!purge 10` or `!purge all`")
+    bot_perms = channel.permissions_for(channel.guild.me)
+    if not bot_perms.manage_messages or not bot_perms.read_message_history:
+        await interaction.response.send_message(
+            "I need **Manage Messages** and **Read Message History** permissions to purge.",
+            ephemeral=True,
+        )
         return
 
     if amount.lower() == "all":
-        confirm_msg = await ctx.reply(
+        await interaction.response.send_message(
             "Are you sure you want to delete **all** messages in this channel? "
-            "Reply `yes` within 15 seconds to confirm."
+            "Reply `yes` within 15 seconds to confirm.",
         )
-        try:
-            reply = await bot.wait_for(
-                "message",
-                check=lambda m: (
-                    m.author == ctx.author
-                    and m.channel == ctx.channel
-                    and m.content.strip().lower() in ("yes", "y")
-                ),
-                timeout=15.0,
+
+        def check(m: discord.Message) -> bool:
+            return (
+                m.author == interaction.user
+                and m.channel == channel
+                and m.content.strip().lower() in ("yes", "y")
             )
+
+        try:
+            await bot.wait_for("message", check=check, timeout=15.0)
         except asyncio.TimeoutError:
-            await confirm_msg.edit(content="Purge cancelled (timed out).")
+            await interaction.edit_original_response(content="Purge cancelled (timed out).")
             return
 
-        deleted = await ctx.channel.purge(limit=None)
-        info = await ctx.channel.send(f"Purged **{len(deleted)}** messages.")
+        deleted = await channel.purge(limit=None)
+        info = await channel.send(f"Purged **{len(deleted)}** messages.")
         await info.delete(delay=5)
-        logger.info("purge all: %d messages deleted in #%s by %s", len(deleted), ctx.channel.name, ctx.author)
+        logger.info("purge all: %d messages deleted in #%s by %s", len(deleted), channel.name, interaction.user)
         return
 
     try:
         count = int(amount)
     except ValueError:
-        await ctx.reply("Please provide a number or `all`.\nExample: `!purge 25` or `!purge all`")
+        await interaction.response.send_message(
+            'Please provide a number or `all`.\nExample: `/purge 25` or `/purge all`',
+            ephemeral=True,
+        )
         return
 
     if count < 1:
-        await ctx.reply("Amount must be at least 1.")
+        await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
         return
     if count > 500:
-        await ctx.reply("Maximum purge is 500 messages at a time. Use `!purge all` to clear the channel.")
+        await interaction.response.send_message(
+            "Maximum purge is 500 messages at a time. Use `/purge all` to clear the channel.",
+            ephemeral=True,
+        )
         return
 
-    # +1 to include the !purge command message itself
-    deleted = await ctx.channel.purge(limit=count + 1)
-    info = await ctx.channel.send(f"Purged **{len(deleted) - 1}** messages.")
-    await info.delete(delay=5)
-    logger.info("purge %d: %d messages deleted in #%s by %s", count, len(deleted) - 1, ctx.channel.name, ctx.author)
-
-
-@purge_command.error
-async def purge_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.reply("You need the **Manage Messages** permission to use `!purge`.")
-    elif isinstance(error, commands.BotMissingPermissions):
-        await ctx.reply("I need **Manage Messages** and **Read Message History** permissions to purge.")
-    else:
-        logger.exception("Unhandled error in !purge: %s", error)
-        await ctx.reply("Something went wrong. Please try again later.")
+    await interaction.response.defer(ephemeral=True)
+    deleted = await channel.purge(limit=count)
+    await interaction.followup.send(f"Purged **{len(deleted)}** messages.", ephemeral=True)
+    logger.info("purge %d: %d messages deleted in #%s by %s", count, len(deleted), channel.name, interaction.user)
 
 
 # ---------------------------------------------------------------------------
-# !groups command
+# /groups
 # ---------------------------------------------------------------------------
 
 _GROUPS_INLINE_MAX = 20
-_PRESET_NAMES = ", ".join(f"`{k}`" for k in VIEW_PRESETS)
-_GROUP_NAMES = ", ".join(f"`{g}`" for g in sorted(VALID_GROUPS))
+
+_GROUP_CHOICES = [
+    app_commands.Choice(name="Sector", value="sector"),
+    app_commands.Choice(name="Industry", value="industry"),
+    app_commands.Choice(name="Country", value="country"),
+    app_commands.Choice(name="Market Cap", value="cap"),
+]
+
+_PRESET_CHOICES = [
+    app_commands.Choice(name="Custom", value="custom"),
+    app_commands.Choice(name="Overview", value="overview"),
+    app_commands.Choice(name="Valuation", value="valuation"),
+    app_commands.Choice(name="Performance", value="performance"),
+]
 
 
 def _fmt_mcap(raw: str) -> str:
-    """Format a raw market cap number (in millions) into human-readable form."""
     try:
         val = float(raw.replace(",", ""))
     except (ValueError, TypeError):
@@ -500,12 +432,9 @@ def _fmt_mcap(raw: str) -> str:
 
 
 def _build_groups_table(columns: list[str], rows: list[dict[str, str]], limit: int | None = None) -> str:
-    """Build a fixed-width text table from groups data."""
     display_rows = rows[:limit] if limit else rows
-    # Skip "No." column — not useful in Discord
     cols = [c for c in columns if c != "No."]
 
-    # Compute column widths
     widths = {c: len(c) for c in cols}
     formatted: list[dict[str, str]] = []
     for row in display_rows:
@@ -533,7 +462,6 @@ def _build_groups_table(columns: list[str], rows: list[dict[str, str]], limit: i
 
 
 def _rebuild_csv(columns: list[str], rows: list[dict[str, str]]) -> bytes:
-    """Rebuild CSV bytes from parsed rows for file attachment."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(columns)
@@ -542,99 +470,70 @@ def _rebuild_csv(columns: list[str], rows: list[dict[str, str]]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-@bot.command(name="groups")
-async def groups_command(ctx: commands.Context, group: str | None = None, preset: str | None = None):
-    """Post Finviz group screener data (sector, industry, country, cap).
-
-    Usage:
-        !groups sector                — sector data (custom view)
-        !groups industry valuation    — industry data (valuation view)
-        !groups country performance   — country data (performance view)
-    """
-    if group is None:
-        await ctx.reply(
-            f"Usage: `!groups <group> [preset]`\n"
-            f"Groups: {_GROUP_NAMES}\n"
-            f"Presets: {_PRESET_NAMES} (default: `custom`)\n"
-            f"Example: `!groups sector` or `!groups industry valuation`"
-        )
-        return
-
-    group = group.lower()
-    if group not in VALID_GROUPS:
-        await ctx.reply(f"Unknown group `{group}`. Choose from: {_GROUP_NAMES}")
-        return
-
-    view_name = (preset or "custom").lower()
-    if view_name not in VIEW_PRESETS:
-        await ctx.reply(f"Unknown preset `{preset}`. Choose from: {_PRESET_NAMES}")
-        return
+@tree.command(name="groups", description="Finviz group screener data (sector, industry, country, cap)")
+@app_commands.describe(
+    group="Group type",
+    preset="View preset (columns)",
+)
+@app_commands.choices(group=_GROUP_CHOICES, preset=_PRESET_CHOICES)
+async def groups_command(
+    interaction: discord.Interaction,
+    group: app_commands.Choice[str],
+    preset: app_commands.Choice[str] | None = None,
+):
+    group_val = group.value
+    view_name = preset.value if preset else "custom"
     view_code = VIEW_PRESETS[view_name]
 
-    async with ctx.typing():
-        columns, rows = await asyncio.to_thread(fetch_groups, group, view_code)
+    await interaction.response.defer()
+    columns, rows = await asyncio.to_thread(fetch_groups, group_val, view_code)
 
     if not rows:
-        await ctx.reply(f"No data returned for **{group}** ({view_name}). Check the logs for details.")
+        await interaction.followup.send(f"No data returned for **{group_val}** ({view_name}). Check the logs for details.")
         return
 
-    title = f"{group.title()} — {view_name.title()}"
+    title = f"{group_val.title()} — {view_name.title()}"
     embed = discord.Embed(
         title=title,
         color=0xF39C12,
-        url=f"https://elite.finviz.com/groups.ashx?g={group}&v={view_code}",
+        url=f"https://elite.finviz.com/groups.ashx?g={group_val}&v={view_code}",
     )
 
     file = None
     if len(rows) <= _GROUPS_INLINE_MAX:
         table = _build_groups_table(columns, rows)
-        # Discord code block max per field is 1024; embed description max is 4096
-        if len(table) + 8 <= 4090:  # account for ```\n...\n```
+        if len(table) + 8 <= 4090:
             embed.description = f"```\n{table}\n```"
         else:
-            # Table too wide — truncate and attach CSV
             short = _build_groups_table(columns, rows, limit=10)
             embed.description = f"```\n{short}\n```"
             csv_bytes = _rebuild_csv(columns, rows)
-            fname = f"groups_{group}_{view_name}.csv"
+            fname = f"groups_{group_val}_{view_name}.csv"
             file = discord.File(io.BytesIO(csv_bytes), filename=fname)
             embed.add_field(name="Full data", value=f"See attached `{fname}`", inline=False)
     else:
-        # Large dataset — show preview + CSV attachment
         preview = _build_groups_table(columns, rows, limit=10)
         if len(preview) + 8 <= 4090:
             embed.description = f"```\n{preview}\n```"
         embed.add_field(
             name="Rows",
-            value=f"{len(rows)} {group} groups — full data attached as CSV",
+            value=f"{len(rows)} {group_val} groups — full data attached as CSV",
             inline=False,
         )
         csv_bytes = _rebuild_csv(columns, rows)
-        fname = f"groups_{group}_{view_name}.csv"
+        fname = f"groups_{group_val}_{view_name}.csv"
         file = discord.File(io.BytesIO(csv_bytes), filename=fname)
 
     embed.set_footer(text="Data from FinViz Elite")
 
     if file:
-        await ctx.reply(embed=embed, file=file)
+        await interaction.followup.send(embed=embed, file=file)
     else:
-        await ctx.reply(embed=embed)
-
-
-@groups_command.error
-async def groups_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply(
-            f"Usage: `!groups <group> [preset]`\n"
-            f"Groups: {_GROUP_NAMES}\nPresets: {_PRESET_NAMES}"
-        )
-    else:
-        logger.exception("Unhandled error in !groups: %s", error)
-        await ctx.reply("Something went wrong. Please try again later.")
+        await interaction.followup.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------
-# Dynamic !SYMBOL quote panel
+# /quote (replaces the old !SYMBOL shortcut)
 # ---------------------------------------------------------------------------
 
 def _fmt_vol(v: int) -> str:
@@ -645,25 +544,29 @@ def _fmt_vol(v: int) -> str:
     return f"{v:,}"
 
 
-async def _handle_ticker_quote(message: discord.Message, ticker: str):
-    """Compose and send a quote panel: chart + OHLCV + latest news."""
-    channel = message.channel
+@tree.command(name="quote", description="Quick quote panel — chart, OHLCV, change, and latest news")
+@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)")
+async def quote_command(interaction: discord.Interaction, symbol: str):
+    ticker = validate_symbol(symbol)
+    if ticker is None:
+        await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
+        return
 
-    async with channel.typing():
-        bars, chart_data, articles = await asyncio.gather(
-            asyncio.to_thread(fetch_quote, ticker, 5),
-            asyncio.to_thread(fetch_chart, ticker, "d"),
-            asyncio.to_thread(fetch_news, ticker, 3),
-        )
+    await interaction.response.defer()
+
+    bars, chart_data, articles = await asyncio.gather(
+        asyncio.to_thread(fetch_quote, ticker, 5),
+        asyncio.to_thread(fetch_chart, ticker, "d"),
+        asyncio.to_thread(fetch_news, ticker, 3),
+    )
 
     if not bars:
-        await message.reply(f"No quote data found for **{ticker}**.")
+        await interaction.followup.send(f"No quote data found for **{ticker}**.")
         return
 
     latest = bars[0]
     prev_close = bars[1].close if len(bars) > 1 else None
 
-    # Calculate change from previous close
     if prev_close and prev_close != 0:
         chg = latest.close - prev_close
         chg_pct = (chg / prev_close) * 100
@@ -683,7 +586,6 @@ async def _handle_ticker_quote(message: discord.Message, ticker: str):
     embed.add_field(name="Volume", value=_fmt_vol(latest.volume), inline=True)
     embed.add_field(name="Date", value=latest.date, inline=True)
 
-    # Recent days table
     if len(bars) > 1:
         lines = ["Date       |  Close   |  Volume"]
         lines.append("-" * len(lines[0]))
@@ -693,7 +595,6 @@ async def _handle_ticker_quote(message: discord.Message, ticker: str):
         if len(table) <= 1000:
             embed.add_field(name="Recent Days", value=f"```\n{table}\n```", inline=False)
 
-    # Latest news (3 headlines)
     if articles:
         news_lines = []
         for a in articles:
@@ -701,7 +602,6 @@ async def _handle_ticker_quote(message: discord.Message, ticker: str):
             news_lines.append(f"[{a.title}]({a.url}){src}")
         embed.add_field(name="Latest News", value="\n".join(news_lines), inline=False)
 
-    # Attach chart image
     file = None
     if chart_data:
         filename = f"{ticker}_daily.png"
@@ -711,9 +611,29 @@ async def _handle_ticker_quote(message: discord.Message, ticker: str):
     embed.set_footer(text="Data from FinViz Elite")
 
     if file:
-        await message.reply(embed=embed, file=file)
+        await interaction.followup.send(embed=embed, file=file)
     else:
-        await message.reply(embed=embed)
+        await interaction.followup.send(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# Global error handler
+# ---------------------------------------------------------------------------
+
+@tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        msg = "You don't have permission to use this command."
+    elif isinstance(error, app_commands.BotMissingPermissions):
+        msg = "I'm missing the required permissions for this command."
+    else:
+        logger.exception("Unhandled slash command error: %s", error)
+        msg = "Something went wrong. Please try again later."
+
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
 
 
 # ---------------------------------------------------------------------------

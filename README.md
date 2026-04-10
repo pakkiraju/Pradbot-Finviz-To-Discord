@@ -6,22 +6,21 @@ A Discord bot and webhook toolkit that brings FinViz data into your Discord serv
 
 ### Discord Bot (`bot.py`)
 
-A persistent Discord bot that responds to commands in real time:
+A persistent Discord bot that responds to **slash commands** in real time. All commands use Discord's native `/` command system with autocomplete and dropdown menus.
 
 | Command | What it does |
 |---|---|
-| `!chart AAPL` | Posts a **daily** FinViz candlestick chart for AAPL |
-| `!chart MSFT w` | Posts a **weekly** chart (`d` = daily, `w` = weekly, `m` = monthly) |
-| `!chart TSLA m` | Posts a **monthly** chart |
-| `!gex AAPL` | Posts **GEX analysis** for AAPL (nearest future expiry with gamma data) |
-| `!gex SPY 2025-07-18` | GEX for a **specific expiration date** |
-| `!0dte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
-| `!news AAPL` | Latest **5 news articles** with clickable links |
-| `!AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
-| `!groups sector` | **Sector** aggregate data (market cap, P/E, change, volume, etc.) |
-| `!groups industry valuation` | **Industry** data with a specific view preset |
+| `/chart AAPL` | Posts a **daily** FinViz candlestick chart for AAPL |
+| `/chart MSFT Weekly` | Posts a **weekly** chart (timeframe dropdown: Daily, Weekly, Monthly) |
+| `/gex AAPL` | Posts **GEX analysis** for AAPL (nearest future expiry with gamma data) |
+| `/gex SPY 2025-07-18` | GEX for a **specific expiration date** |
+| `/zerodte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
+| `/news AAPL` | Latest **5 news articles** with clickable links |
+| `/quote AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
+| `/groups Sector` | **Sector** aggregate data (market cap, P/E, change, volume, etc.) |
+| `/groups Industry Valuation` | **Industry** data with a specific view preset (dropdown menus) |
 
-Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `!news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `!SYMBOL` (any valid ticker on its own) posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed.
+Charts are fetched from FinViz Elite as full-size PNG images. `/gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `/zerodte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `/news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `/quote` posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed.
 
 ### Webhook Posters
 
@@ -110,7 +109,7 @@ The free version does not need a `.env` file.
 
 ### 5. Create a Discord bot application and get the token
 
-Follow these steps to create the bot that will respond to `!chart`, `!gex`, `!0dte`, and `!news` commands.
+Follow these steps to create the bot that will respond to `/chart`, `/gex`, `/zerodte`, `/news`, and other slash commands.
 
 #### 5a. Create the application
 
@@ -130,29 +129,32 @@ DISCORD_BOT_TOKEN=paste_your_token_here
 
 > **Keep this token secret.** Anyone with the token can control your bot. If it leaks, click **Reset Token** immediately to generate a new one.
 
-#### 5c. Enable the Message Content Intent
-
-The bot uses prefix commands (`!chart`) which require reading message content. This is a privileged intent that must be turned on manually:
-
-1. Still on the **Bot** page, scroll down to **Privileged Gateway Intents**.
-2. Toggle **Message Content Intent** to **ON**.
-3. Click **Save Changes**.
-
-Without this, the bot will connect but silently ignore all `!` commands.
-
-#### 5d. Invite the bot to your server
+#### 5c. Invite the bot to your server
 
 1. In the left sidebar, click **OAuth2 > URL Generator**.
-2. Under **Scopes**, check **`bot`**.
+2. Under **Scopes**, check **`bot`** and **`applications.commands`** (required for slash commands).
 3. Under **Bot Permissions**, check:
    - **Send Messages**
    - **Attach Files**
    - **Embed Links**
    - **Read Message History**
+   - **Manage Messages** (for `/purge`)
+   - **Use Slash Commands**
 4. Copy the generated URL at the bottom and open it in your browser.
 5. Select your Discord server from the dropdown and click **Authorize**.
 
 The bot will now appear in your server's member list (offline until you start `bot.py`).
+
+> **Note:** The bot no longer requires the **Message Content Intent** since it uses slash commands instead of prefix commands.
+
+#### 5d. Slash command sync
+
+When the bot starts, it syncs slash commands with Discord. There are two modes:
+
+- **Guild sync (instant, for development):** Set `GUILD_ID=your_server_id` in `.env`. Commands appear immediately in that server.
+- **Global sync (default):** Commands are registered globally but may take up to 1 hour to propagate to all servers.
+
+For development, guild sync is recommended so you can test changes instantly.
 
 ## Usage
 
@@ -174,52 +176,47 @@ python post_scans_elite.py
 python bot.py
 ```
 
-The bot connects to Discord and stays running, listening for commands in any text channel it has access to. You should see `Logged in as PradBot#1234` in the console when it's ready.
+The bot connects to Discord and stays running, listening for slash commands in any text channel it has access to. You should see `Logged in as PradBot#1234` in the console when it's ready.
 
 #### Bot commands
 
+All commands use Discord's `/` slash command system. Parameters with dropdowns are shown in **bold**.
+
 | Command | Description |
 |---|---|
-| `!chart <SYMBOL>` | Post a daily FinViz candlestick chart for the given ticker |
-| `!chart <SYMBOL> d` | Daily chart (same as above — `d` is the default) |
-| `!chart <SYMBOL> w` | Weekly chart |
-| `!chart <SYMBOL> m` | Monthly chart |
-| `!gex <SYMBOL>` | GEX / options analysis for nearest future expiry |
-| `!gex <SYMBOL> <YYYY-MM-DD>` | GEX for a specific expiration date |
-| `!0dte <SYMBOL>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
-| `!news <SYMBOL>` | Latest 5 news articles with clickable links, dates, and sources |
-| `!purge <number>` | Delete the last N messages in the channel (requires Manage Messages) |
-| `!purge all` | Delete **all** messages in the channel (asks for confirmation) |
-| `!<SYMBOL>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
-| `!groups <group> [preset]` | Group screener data: `sector`, `industry`, `country`, or `cap` |
+| `/chart <symbol> [timeframe]` | Post a FinViz candlestick chart (**timeframe** dropdown: Daily, Weekly, Monthly) |
+| `/gex <symbol> [expiry]` | GEX / options analysis for nearest future expiry (or specific YYYY-MM-DD) |
+| `/zerodte <symbol>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
+| `/news <symbol>` | Latest 5 news articles with clickable links, dates, and sources |
+| `/quote <symbol>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
+| `/purge <amount>` | Delete messages in the channel (number or "all"; requires Manage Messages) |
+| `/groups <group> [preset]` | Group screener data (**group** dropdown: Sector, Industry, Country, Market Cap; **preset** dropdown: Custom, Overview, Valuation, Performance) |
 
 **Examples:**
 
 ```
-!chart AAPL
-!chart MSFT w
-!chart TSLA m
-!chart BRK.B
-!gex AAPL
-!gex SPY 2025-07-18
-!0dte AAPL
-!0dte SPY
-!news AAPL
-!news TSLA
-!purge 10
-!purge all
-!MSFT
-!AAPL
-!TSLA
-!groups sector
-!groups industry valuation
-!groups country performance
-!groups cap overview
+/chart symbol:AAPL
+/chart symbol:MSFT timeframe:Weekly
+/chart symbol:TSLA timeframe:Monthly
+/gex symbol:AAPL
+/gex symbol:SPY expiry:2025-07-18
+/zerodte symbol:AAPL
+/zerodte symbol:SPY
+/news symbol:AAPL
+/news symbol:TSLA
+/quote symbol:MSFT
+/quote symbol:AAPL
+/purge amount:10
+/purge amount:all
+/groups group:Sector
+/groups group:Industry preset:Valuation
+/groups group:Country preset:Performance
+/groups group:Market Cap preset:Overview
 ```
 
-The bot replies with an embedded image (charts) or an embed with analysis fields (options). Typing just `!SYMBOL` (e.g. `!MSFT`) posts a combined quote panel with chart, price data, and news in one message. `!groups` posts aggregate metrics for sectors, industries, countries, or market cap tiers. If the symbol is invalid or data can't be fetched, it replies with an error message.
+The bot replies with an embedded image (charts) or an embed with analysis fields (options). `/quote` posts a combined panel with chart, price data, and news in one message. `/groups` posts aggregate metrics for sectors, industries, countries, or market cap tiers with dropdown selection. If the symbol is invalid or data can't be fetched, the bot replies with an ephemeral error message (only visible to you).
 
-**What `!gex` shows:**
+**What `/gex` shows:**
 - **Net GEX** — total dealer gamma exposure across all strikes.
 - **Call Wall** — strike with the largest positive gamma exposure (resistance).
 - **Put Wall** — strike with the largest negative gamma exposure (support).
@@ -229,7 +226,7 @@ The bot replies with an embedded image (charts) or an embed with analysis fields
 
 If gamma data is not available in the Finviz export, the bot falls back to **OI-based walls** and labels them accordingly.
 
-**What `!0dte` shows:**
+**What `/zerodte` shows:**
 - **Call OI Wall** — strike with the highest call open interest (resistance).
 - **Put OI Wall** — strike with the highest put open interest (support).
 - **P/C Ratio** — put-to-call open interest ratio.
@@ -238,27 +235,27 @@ If gamma data is not available in the Finviz export, the bot falls back to **OI-
 
 Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather than GEX.
 
-**What `!news` shows:**
+**What `/news` shows:**
 - The **5 most recent** news articles related to the ticker.
 - Each article is a **clickable link** that opens directly in your browser.
 - **Date** and **source** (e.g. Reuters, Bloomberg) are shown for each article.
 
-**What `!SYMBOL` shows (quick quote panel):**
+**What `/quote` shows (quick quote panel):**
 - **Daily chart** — full-size candlestick chart from FinViz Elite.
 - **Last close** with daily change (dollar and percent) in the title.
 - **OHLCV** — open, high, low, volume for the latest bar.
 - **Recent Days** — 5-day OHLCV history table.
 - **Latest News** — 3 most recent headlines as clickable links.
 
-This is a shortcut that combines `!chart`, price data, and `!news` into a single response. Any valid ticker works (e.g. `!MSFT`, `!AAPL`, `!BRK.B`). Reserved command names like `chart`, `gex`, `news`, `purge`, etc. are not treated as tickers.
+This combines `/chart`, price data, and `/news` into a single response.
 
-**What `!groups` shows:**
+**What `/groups` shows:**
 - Aggregate metrics for groups of stocks organized by **sector**, **industry**, **country**, or **market cap** tier.
-- Available view presets control which columns are returned:
-  - `overview` — stocks, market cap, dividend yield, P/E, forward P/E, PEG, debt ratios, analyst recom, change, volume.
-  - `valuation` — market cap, P/E, forward P/E, PEG, P/S, P/B, P/C, P/FCF, EPS growth, sales growth, change, volume.
-  - `performance` — weekly/monthly/quarterly/half-year/yearly/YTD performance, avg volume, relative volume, change, volume.
-  - `custom` (default) — market cap, P/E, dividend yield, avg volume, change, volume, stocks.
+- Available view presets (selectable via dropdown) control which columns are returned:
+  - `Overview` — stocks, market cap, dividend yield, P/E, forward P/E, PEG, debt ratios, analyst recom, change, volume.
+  - `Valuation` — market cap, P/E, forward P/E, PEG, P/S, P/B, P/C, P/FCF, EPS growth, sales growth, change, volume.
+  - `Performance` — weekly/monthly/quarterly/half-year/yearly/YTD performance, avg volume, relative volume, change, volume.
+  - `Custom` (default) — market cap, P/E, dividend yield, avg volume, change, volume, stocks.
 - Small groups (e.g. sector with ~11 rows) are displayed inline as a monospace table. Large groups (e.g. industry with ~140+ rows) include a preview table and attach the full data as a CSV file.
 
 ### Options (webhook scripts)
@@ -315,7 +312,7 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, !news, !SYMBOL, !groups)
+  bot.py                 # Discord bot entry point (slash commands: /chart, /gex, /zerodte, /news, /quote, /groups, /purge)
   finviz_chart.py        # Fetches chart images from FinViz Elite
   finviz_groups.py       # Fetches group screener data from FinViz Elite groups export
   finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
@@ -346,17 +343,17 @@ PradBot-Finviz-To-Discord/
 
 **Discord 400 Bad Request** — Usually means the embed payload is too large. Each scan is capped at 50 results and embeds are sent one at a time to stay within Discord's limits, so this should be rare.
 
-**Bot ignores `!chart` messages** — Make sure the **Message Content Intent** is enabled in the Discord Developer Portal for your bot application.
+**Slash commands not showing up** — After starting the bot, global slash commands can take up to 1 hour to appear in Discord. For instant sync, set `GUILD_ID=your_server_id` in `.env`. Also ensure you invited the bot with the `applications.commands` scope.
 
 **"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
 
-**"No options data returned"** — The symbol may not have listed options, or the specific expiry date you entered doesn't exist for that ticker. Try without a date (`!gex AAPL`) to auto-select the nearest future expiry. The bot fetches all available expirations from the Finviz Elite export and picks the closest one after today.
+**"No options data returned"** — The symbol may not have listed options, or the specific expiry date you entered doesn't exist for that ticker. Try without a date (`/gex AAPL`) to auto-select the nearest future expiry. The bot fetches all available expirations from the Finviz Elite export and picks the closest one after today.
 
-**"No 0DTE options data"** — The symbol doesn't have options expiring today. Not every ticker has daily expirations — most only have weekly or monthly. Try `!gex SYMBOL` instead to see the nearest available expiry.
+**"No 0DTE options data"** — The symbol doesn't have options expiring today. Not every ticker has daily expirations — most only have weekly or monthly. Try `/gex SYMBOL` instead to see the nearest available expiry.
 
 **"No news found"** — The symbol may not have any recent news articles in the FinViz database, or the API key may be invalid. Verify your `FINVIZ_API_KEY` is correct and the Elite subscription is active.
 
-**"Gamma data not available"** — The Finviz options export didn't include gamma values for the selected expiry (common for 0DTE or very near-term expirations). The bot will show OI-based walls instead. If you want gamma-based GEX, try a further-out expiry (e.g. `!gex AAPL 2025-07-18`).
+**"Gamma data not available"** — The Finviz options export didn't include gamma values for the selected expiry (common for 0DTE or very near-term expirations). The bot will show OI-based walls instead. If you want gamma-based GEX, try a further-out expiry (e.g. `/gex AAPL 2025-07-18`).
 
 ## License
 
