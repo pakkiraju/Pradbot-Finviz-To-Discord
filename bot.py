@@ -21,7 +21,7 @@ import discord
 from discord import app_commands
 
 from discord_payload import build_embeds
-from fetch_elite import fetch_scan
+from fetch_elite import fetch_scan, fetch_top_movers
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
 from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
 from finviz_news import fetch_news
@@ -540,6 +540,113 @@ async def scans_command(interaction: discord.Interaction, scan: app_commands.Cho
         emb_count,
         interaction.user,
     )
+
+
+# ---------------------------------------------------------------------------
+# /top_gainers  /top_losers
+# ---------------------------------------------------------------------------
+
+
+def _fmt_movers_vol(val) -> str:
+    n = None
+    raw = str(val).strip().replace(",", "")
+    try:
+        n = float(raw)
+    except (ValueError, TypeError):
+        return str(val)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:,.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:,.0f}K"
+    return f"{n:,.0f}"
+
+
+def _build_movers_embed(
+    kind: str,
+    rows: list[dict],
+    screener_url: str,
+    min_price: float | None,
+    min_volume: float | None,
+) -> discord.Embed:
+    label = "Gainers" if kind == "gainers" else "Losers"
+    color = 0x00C853 if kind == "gainers" else 0xFF1744
+    title = f"Top {len(rows)} {label} (USA)"
+
+    embed = discord.Embed(title=title, color=color, url=screener_url)
+
+    if not rows:
+        embed.description = f"*No {label.lower()} matched the filters.*"
+    else:
+        header = f"{'Ticker':<6} {'Price':>9} {'Chg%':>8} {'Volume':>9}"
+        lines = [header, "-" * len(header)]
+        for r in rows:
+            tk = (r.get("ticker") or "")[:6].ljust(6)
+            pr = str(r.get("price") or "").rjust(9)
+            ch = str(r.get("change") or "").rjust(8)
+            vo = _fmt_movers_vol(r.get("volume") or "").rjust(9)
+            lines.append(f"{tk} {pr} {ch} {vo}")
+        embed.description = f"```\n{chr(10).join(lines)}\n```"
+
+    filters = []
+    if min_price is not None:
+        filters.append(f"price >= ${min_price:,.2f}")
+    if min_volume is not None:
+        filters.append(f"volume >= {_fmt_movers_vol(min_volume)}")
+    footer = "Data from FinViz Elite"
+    if filters:
+        footer += "  |  Filters: " + ", ".join(filters)
+    embed.set_footer(text=footer)
+    return embed
+
+
+@tree.command(name="top_gainers", description="Top 10 gaining stocks today (USA, sorted by change %)")
+@app_commands.describe(
+    min_price="Only show stocks at or above this price (optional)",
+    min_volume="Only show stocks with at least this much volume today (optional)",
+)
+async def top_gainers_command(
+    interaction: discord.Interaction,
+    min_price: float | None = None,
+    min_volume: float | None = None,
+):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/top_gainers`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(
+        fetch_top_movers, "gainers", min_price=min_price, min_volume=min_volume
+    )
+    embed = _build_movers_embed("gainers", rows, screener_url, min_price, min_volume)
+    await interaction.followup.send(embed=embed)
+    logger.info("top_gainers: %d rows for %s", len(rows), interaction.user)
+
+
+@tree.command(name="top_losers", description="Top 10 losing stocks today (USA, sorted by change %)")
+@app_commands.describe(
+    min_price="Only show stocks at or above this price (optional)",
+    min_volume="Only show stocks with at least this much volume today (optional)",
+)
+async def top_losers_command(
+    interaction: discord.Interaction,
+    min_price: float | None = None,
+    min_volume: float | None = None,
+):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/top_losers`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(
+        fetch_top_movers, "losers", min_price=min_price, min_volume=min_volume
+    )
+    embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
+    await interaction.followup.send(embed=embed)
+    logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
 
 
 # ---------------------------------------------------------------------------

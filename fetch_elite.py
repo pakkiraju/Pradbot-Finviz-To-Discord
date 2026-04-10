@@ -229,3 +229,66 @@ def _change_sort_key(row: dict) -> float:
         return float(str(val).replace("%", "").replace(",", ""))
     except (ValueError, TypeError):
         return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Top movers (gainers / losers)
+# ---------------------------------------------------------------------------
+
+_TOP_MOVERS_EXPORT = "https://elite.finviz.com/export.ashx"
+_TOP_MOVERS_SCREENER = "https://elite.finviz.com/screener.ashx"
+
+_MOVERS_SIGNALS = {
+    "gainers": "ta_topgainers",
+    "losers": "ta_toplosers",
+}
+
+_MOVERS_COLUMNS = "1,2,3,4,5,6,7,47,65"
+
+
+def fetch_top_movers(
+    kind: str,
+    *,
+    min_price: float | None = None,
+    min_volume: float | None = None,
+    limit: int = 10,
+) -> tuple[list[dict], str]:
+    """Fetch top gainers or losers from FinViz Elite.
+
+    Returns (rows, screener_url). Rows are normalized dicts sorted by |change|
+    (descending for gainers, ascending for losers), capped at *limit*.
+    """
+    if kind not in _MOVERS_SIGNALS:
+        raise ValueError(f"kind must be 'gainers' or 'losers', got {kind!r}")
+
+    api_key = _get_api_key()
+    if not api_key:
+        return [], ""
+
+    signal = _MOVERS_SIGNALS[kind]
+    sort = "-change" if kind == "gainers" else "change"
+    export_url = (
+        f"{_TOP_MOVERS_EXPORT}?v=152&s={signal}&f=geo_usa"
+        f"&o={sort}&c={_MOVERS_COLUMNS}"
+    )
+    screener_url = f"{_TOP_MOVERS_SCREENER}?v=152&s={signal}&f=geo_usa"
+
+    raw_rows = _fetch_csv(export_url, caller=f"top_{kind}")
+    rows: list[dict] = []
+    for r in raw_rows:
+        normed = _normalize_row(r)
+        if not normed.get("ticker"):
+            continue
+        if min_price is not None:
+            p = _parse_num(normed.get("price"))
+            if p is None or p < min_price:
+                continue
+        if min_volume is not None:
+            v = _parse_num(normed.get("volume"))
+            if v is None or v < min_volume:
+                continue
+        rows.append(normed)
+
+    reverse = kind == "gainers"
+    rows.sort(key=lambda r: abs(_change_sort_key(r)), reverse=reverse)
+    return rows[:limit], screener_url
