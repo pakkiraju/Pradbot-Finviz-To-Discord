@@ -23,7 +23,7 @@ import discord
 from discord import app_commands
 
 from discord_payload import build_embeds
-from fetch_elite import fetch_scan, fetch_top_movers
+from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
 from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
 from finviz_news import fetch_news
@@ -86,8 +86,8 @@ _SCANS_ALL_DELAY_SEC = 1.5
 
 async def _followup_scan_embeds(interaction: discord.Interaction, scan_def) -> tuple[int, int]:
     """Fetch one scan and post embed(s). Returns (row_count, embed_count)."""
-    rows = await asyncio.to_thread(fetch_scan, scan_def)
-    embed_dicts = build_embeds(scan_def.title, rows, screener_url=scan_def.screener_url)
+    rows, screener_url = await asyncio.to_thread(fetch_scan_with_screener, scan_def)
+    embed_dicts = build_embeds(scan_def.title, rows, screener_url=screener_url)
     embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
     await interaction.followup.send(embed=embeds[0])
     for emb in embeds[1:]:

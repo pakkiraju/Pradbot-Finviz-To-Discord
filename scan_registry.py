@@ -7,6 +7,8 @@ Each entry maps a scan_id (matching webhooks.json keys) to:
   - title:        Human-readable name shown in the Discord embed.
   - export_urls:  FinViz Elite export.ashx URL(s) that return CSV data.
   - screener_url: FinViz screener.ashx URL for the "View on FinViz" embed link.
+  - movers_kind:  Optional. ``gainers`` / ``losers`` for Top Gainers/Losers presets (Elite CSV via
+                  ``fetch_top_movers``; free poster uses ``screener_url`` only).
 """
 
 from dataclasses import dataclass, field
@@ -18,6 +20,9 @@ class ScanDef:
     title: str
     export_urls: list[str] = field(default_factory=list)
     screener_url: str = ""
+    # FinViz "Top Gainers / Top Losers" presets (ta_topgainers / ta_toplosers). When set,
+    # Elite uses fetch_top_movers; export_urls is ignored. Free poster uses screener_url only.
+    movers_kind: str | None = None
 
 
 SCANS: list[ScanDef] = [
@@ -153,6 +158,21 @@ SCANS: list[ScanDef] = [
             "https://elite.finviz.com/export.ashx?v=141&f=earningsdate_thisweek,sh_avgvol_o1000,sh_price_o1&ft=4&o=-marketcap&c=1,47,61,62,63,64,65",
         ],
         screener_url="https://elite.finviz.com/screener.ashx?v=111&f=earningsdate_thisweek,sh_avgvol_o1000,sh_price_o1&ft=4&o=-marketcap",
+    ),
+    # --- Top movers (FinViz preset signals; Elite CSV + v=152 screener link) ---
+    ScanDef(
+        scan_id="top_gainers",
+        title="Top Gainers",
+        export_urls=[],
+        screener_url="https://elite.finviz.com/screener.ashx?v=152&s=ta_topgainers",
+        movers_kind="gainers",
+    ),
+    ScanDef(
+        scan_id="top_losers",
+        title="Top Losers",
+        export_urls=[],
+        screener_url="https://elite.finviz.com/screener.ashx?v=152&s=ta_toplosers",
+        movers_kind="losers",
     ),
 ]
 

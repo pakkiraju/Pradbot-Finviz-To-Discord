@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from scan_registry import SCAN_BY_ID, SCANS
-from fetch_free import fetch_scan
+from fetch_free import fetch_scan_with_screener
 from discord_payload import build_embeds, post_to_webhook
 
 logger = logging.getLogger("discord_poster.free")
@@ -57,7 +57,7 @@ def run(webhooks: dict[str, str], dry_run: bool = False):
 
         logger.info("Fetching: %s (free)", scan.title)
         try:
-            rows = fetch_scan(scan)
+            rows, _ = fetch_scan_with_screener(scan)
         except Exception as e:
             logger.error("Fetch failed for %s: %s", scan.scan_id, e)
             errors += 1

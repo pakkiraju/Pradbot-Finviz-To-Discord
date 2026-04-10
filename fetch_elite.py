@@ -190,9 +190,15 @@ def _normalize_row(raw: dict) -> dict:
 def fetch_scan(scan_def) -> list[dict]:
     """Fetch scan data from FinViz Elite for the given ScanDef.
 
-    Iterates over scan_def.export_urls, fetches CSV from each, normalizes
-    rows, and deduplicates by ticker.
+    For *movers_kind* ``gainers`` / ``losers``, uses :func:`fetch_top_movers` (Top Gainers/Losers
+    preset). Otherwise iterates over *export_urls*, fetches CSV from each, normalizes rows,
+    and deduplicates by ticker.
     """
+    mk = getattr(scan_def, "movers_kind", None)
+    if mk in ("gainers", "losers"):
+        rows, _ = fetch_top_movers(mk, limit=50)
+        return rows
+
     api_key = _get_api_key()
     if not api_key:
         logger.error(
@@ -317,3 +323,16 @@ def fetch_top_movers(
     reverse = kind == "gainers"
     rows.sort(key=lambda r: abs(_change_sort_key(r)), reverse=reverse)
     return rows[:limit], screener_url
+
+
+def fetch_scan_with_screener(scan_def) -> tuple[list[dict], str]:
+    """Fetch rows and the FinViz screener URL for the embed \"View on FinViz\" link.
+
+    Top movers scans return the dynamic v=152 URL from :func:`fetch_top_movers`; other scans
+    use *scan_def.screener_url*.
+    """
+    mk = getattr(scan_def, "movers_kind", None)
+    if mk in ("gainers", "losers"):
+        return fetch_top_movers(mk, limit=50)
+    rows = fetch_scan(scan_def)
+    return rows, scan_def.screener_url or ""

@@ -7,7 +7,14 @@ This repository ships **two separate products** that live in the same folder and
 | **PradBot** | Long-running Discord **application** (`bot.py`) | Bot user + slash commands in channels |
 | **Scan webhook posters** | One-shot **CLI scripts** (`post_scans_elite.py` / `post_scans_free.py`) | Incoming webhooks per channel (URLs in `webhooks.json`) |
 
-**Shared code (not a third product):** The Elite webhook script and PradBot’s **`/scans`** command both use the same pipeline: **`fetch_elite.fetch_scan`**, **`scan_registry`**, and **`discord_payload.build_embeds`**. PradBot does **not** execute `post_scans_elite.py`; it calls the same Python functions directly so tables match the Elite poster.
+**Shared code (not a third product):** The Elite webhook script and PradBot’s **`/scans`** command both use the same pipeline: **`fetch_elite.fetch_scan`** / **`fetch_scan_with_screener`** (for the correct FinViz link, including Top Gainers/Losers), **`scan_registry`**, and **`discord_payload.build_embeds`**. PradBot does **not** execute `post_scans_elite.py`; it calls the same Python functions directly so tables match the Elite poster.
+
+### Recent changes (batch scans + movers)
+
+- **`top_gainers` / `top_losers`** are registered in **`scan_registry.py`** with FinViz preset signals `ta_topgainers` / `ta_toplosers`. You can add them to **`webhooks.json`** (see **`webhooks.example.json`**) so **`post_scans_elite.py`** and **`post_scans_free.py`** post the same tables as other presets.
+- **`fetch_elite.fetch_scan_with_screener`** returns `(rows, screener_url)`. Top movers need this so Discord embeds link to the correct **v=152** screener URL from the Elite export path, not only the static URL on the scan definition.
+- **`/scans`** uses **`fetch_scan_with_screener`** so “All scans” and single-preset runs match the webhook poster links for Top Gainers/Losers.
+- **Slash `/top_gainers` / `/top_losers`** (top **10**, optional `min_price` / `min_volume`) are unchanged; batch/webhook presets return up to **50** rows and follow the shared cap/sort rules in the **Included Scans** section.
 
 ---
 
@@ -155,7 +162,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /groups group:Industry preset:Valuation
 ```
 
-**What `/scans` does:** Uses **`fetch_elite.fetch_scan`** and **`discord_payload.build_embeds`** — the **same building blocks** as **`post_scans_elite.py`**, but posts into the channel via the bot. **All scans** sends many messages over several minutes.
+**What `/scans` does:** Uses **`fetch_elite.fetch_scan_with_screener`** (rows + FinViz URL for the embed link), **`discord_payload.build_embeds`** — the **same building blocks** as **`post_scans_elite.py`**, but posts into the channel via the bot. **All scans** sends many messages over several minutes.
 
 **What `/gex` shows:** Net GEX, call/put walls, gamma flip, P/C ratio, top strikes (OI fallback if no gamma).
 
@@ -178,6 +185,8 @@ Separate **batch programs**: no bot token. You configure **Discord incoming webh
 
 These scripts **do not** start PradBot and **do not** require `DISCORD_BOT_TOKEN`.
 
+**Top Gainers / Top Losers:** Same **`scan_id`** keys as **`/scans`**: `top_gainers`, `top_losers`. Elite uses the authenticated CSV export for movers (needs **`FINVIZ_API_KEY`**). Free uses the public screener page via **`fetch_free`** (no key; may differ slightly from Elite). Each run posts up to **50** tickers; sorting matches the **Included Scans** notes below.
+
 ### Webhook posters — setup
 
 #### 1) Same clone / `pip install` as above (one venv is fine)
@@ -197,7 +206,9 @@ Map **scan IDs** (see **Included Scans** below) to URLs:
 ```json
 {
     "qulla_episodic": "https://discord.com/api/webhooks/1234567890/abcdef...",
-    "jeff_sun_canslim": "https://discord.com/api/webhooks/1234567890/ghijkl..."
+    "jeff_sun_canslim": "https://discord.com/api/webhooks/1234567890/ghijkl...",
+    "top_gainers": "https://discord.com/api/webhooks/1234567890/...",
+    "top_losers": "https://discord.com/api/webhooks/1234567890/..."
 }
 ```
 
@@ -274,8 +285,10 @@ Used as keys in **`webhooks.json`** and as **`/scans`** choices (except the synt
 | `jeff_sun_liquid_etfs` | Jeff Sun — Liquid ETFs |
 | `julian_komar_strongest` | Julian Komar — Strongest Stocks |
 | `earnings_calendar_week` | Earnings Calendar — This Week |
+| `top_gainers` | Top Gainers |
+| `top_losers` | Top Losers |
 
-Each scan is sorted by daily change % (descending) and capped at **50** tickers.
+Most presets are sorted by daily change % (descending) and capped at **50** tickers. **Top Losers** is sorted with the most negative changes first. **Top Gainers / Top Losers** use FinViz’s mover presets (`ta_topgainers` / `ta_toplosers`).
 
 ---
 
@@ -293,7 +306,7 @@ PradBot-Finviz-To-Discord/
   post_scans_free.py
   webhooks.example.json  # Copy → webhooks.json (webhook product only)
 
-  # Shared by /scans and post_scans_elite
+  # Shared by /scans and post_scans_elite (fetch_scan / fetch_scan_with_screener)
   scan_registry.py
   fetch_elite.py
   discord_payload.py
