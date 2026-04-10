@@ -17,14 +17,15 @@ A persistent Discord bot that responds to **slash commands** in real time. All c
 | `/zerodte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
 | `/news AAPL` | Latest **5 news articles** with clickable links |
 | `/quote AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
+| `/scans` | Pick any **included screener scan** from a dropdown — same FinViz Elite CSV pipeline as `fetch_elite.py` / `post_scans_elite.py` |
 | `/groups Sector` | **Sector** aggregate data (market cap, P/E, change, volume, etc.) |
 | `/groups Industry Valuation` | **Industry** data with a specific view preset (dropdown menus) |
 
-Charts are fetched from FinViz Elite as full-size PNG images. `/gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `/zerodte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `/news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `/quote` posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed.
+Charts are fetched from FinViz Elite as full-size PNG images. `/gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `/zerodte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `/news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `/quote` posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed. `/scans` runs any preset from **Included Scans** on demand in the current channel (requires `FINVIZ_API_KEY` in `.env`), using the same `fetch_elite.fetch_scan` logic and embed formatting as the Elite webhook poster.
 
 ### Webhook Posters
 
-Scheduled scripts that post FinViz screener scan results to Discord channels via webhooks. Each scan gets its own channel and webhook, and results are formatted as clean embedded tables.
+Scheduled scripts that post FinViz screener scan results to Discord channels via webhooks. Each scan gets its own channel and webhook, and results are formatted as clean embedded tables. For ad-hoc runs without webhooks, use the bot’s **`/scans`** command instead.
 
 - **Elite** (`post_scans_elite.py`) — Uses a FinViz Elite API key for fast, reliable CSV exports. Recommended if you have a paid FinViz subscription.
 - **Free** (`post_scans_free.py`) — Scrapes the public finviz.com screener pages using the [unofficial finviz Python API](https://github.com/mariostoev/finviz). No API key needed, but runs slower due to rate-limit-safe delays.
@@ -109,7 +110,7 @@ The free version does not need a `.env` file.
 
 ### 5. Create a Discord bot application and get the token
 
-Follow these steps to create the bot that will respond to `/chart`, `/gex`, `/zerodte`, `/news`, and other slash commands.
+Follow these steps to create the bot that will respond to `/chart`, `/gex`, `/zerodte`, `/news`, `/scans`, and other slash commands.
 
 #### 5a. Create the application
 
@@ -181,6 +182,7 @@ All commands use Discord's `/` slash command system. Parameters with dropdowns a
 | `/news <symbol>` | Latest 5 news articles with clickable links, dates, and sources |
 | `/quote <symbol>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
 | `/purge <amount>` | Delete messages in the channel (number or **all**; **all** uses **Yes / Cancel** buttons to confirm; requires Manage Messages) |
+| `/scans <scan>` | Run a preset FinViz Elite screener (**scan** dropdown matches **Included Scans** below; uses `fetch_elite`; requires `FINVIZ_API_KEY`) |
 | `/groups <group> [preset]` | Group screener data (**group** dropdown: Sector, Industry, Country, Market Cap; **preset** dropdown: Custom, Overview, Valuation, Performance) |
 
 **Examples:**
@@ -199,13 +201,15 @@ All commands use Discord's `/` slash command system. Parameters with dropdowns a
 /quote symbol:AAPL
 /purge amount:10
 /purge amount:all
+/scans scan:jeff_sun_canslim
+/scans scan:qulla_episodic
 /groups group:Sector
 /groups group:Industry preset:Valuation
 /groups group:Country preset:Performance
 /groups group:Market Cap preset:Overview
 ```
 
-The bot replies with an embedded image (charts) or an embed with analysis fields (options). `/quote` posts a combined panel with chart, price data, and news in one message. `/groups` posts aggregate metrics for sectors, industries, countries, or market cap tiers with dropdown selection. If the symbol is invalid or data can't be fetched, the bot replies with an ephemeral error message (only visible to you).
+The bot replies with an embedded image (charts) or an embed with analysis fields (options). `/quote` posts a combined panel with chart, price data, and news in one message. `/scans` posts the same style of monospace result table as the Elite webhook scripts (large results may split across multiple messages). `/groups` posts aggregate metrics for sectors, industries, countries, or market cap tiers with dropdown selection. If the symbol is invalid or data can't be fetched, the bot replies with an ephemeral error message (only visible to you).
 
 **What `/gex` shows:**
 - **Net GEX** — total dealer gamma exposure across all strikes.
@@ -239,6 +243,10 @@ Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather tha
 - **Latest News** — 3 most recent headlines as clickable links.
 
 This combines `/chart`, price data, and `/news` into a single response.
+
+**What `/scans` shows:**
+- The same **top 50 tickers** (by daily change %) as `post_scans_elite.py`, for the scan you pick — ticker, price, change %, volume, relative volume, with an optional **View on FinViz** link on the first embed.
+- Scan IDs match the **Included Scans** table and `webhooks.json` keys (e.g. `jeff_sun_canslim`, `earnings_calendar_week`).
 
 **What `/groups` shows:**
 - Aggregate metrics for groups of stocks organized by **sector**, **industry**, **country**, or **market cap** tier.
@@ -303,7 +311,7 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (slash commands: /chart, /gex, /zerodte, /news, /quote, /groups, /purge)
+  bot.py                 # Discord bot entry point (slash commands: /chart, /gex, /zerodte, /news, /quote, /scans, /groups, /purge)
   finviz_chart.py        # Fetches chart images from FinViz Elite
   finviz_groups.py       # Fetches group screener data from FinViz Elite groups export
   finviz_options.py      # Fetches options-chain CSV from FinViz Elite export

@@ -3,6 +3,8 @@
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
 Slash commands sync globally when the bot starts (new registrations may take up to ~1 hour to appear everywhere).
+
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py).
 """
 
 import asyncio
@@ -12,18 +14,21 @@ import logging
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import discord
 from discord import app_commands
 
+from discord_payload import build_embeds
+from fetch_elite import fetch_scan
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
 from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
 from finviz_news import fetch_news
 from finviz_options import fetch_options
 from finviz_quote import fetch_quote
 from gex_compute import compute_gex
+from scan_registry import SCAN_BY_ID, SCANS
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -64,6 +69,35 @@ intents = discord.Intents.default()
 
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
+
+_SCAN_CHOICES = [
+    app_commands.Choice(name=s.title[:100], value=s.scan_id)
+    for s in SCANS
+]
+
+
+def _webhook_embed_dict_to_discord(em: dict) -> discord.Embed:
+    """Convert webhook-style embed dict from discord_payload.build_embeds to discord.Embed."""
+    color = em.get("color")
+    if color is None:
+        color = 0x06B6D4
+    embed = discord.Embed(
+        title=em.get("title"),
+        description=em.get("description"),
+        color=color,
+    )
+    if em.get("url"):
+        embed.url = em["url"]
+    ts = em.get("timestamp")
+    if isinstance(ts, str) and ts:
+        try:
+            embed.timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            embed.timestamp = datetime.now(timezone.utc)
+    foot = em.get("footer") or {}
+    if foot.get("text"):
+        embed.set_footer(text=foot["text"])
+    return embed
 
 
 @bot.event
@@ -419,6 +453,51 @@ async def purge_command(interaction: discord.Interaction, amount: str):
     deleted = await channel.purge(limit=count)
     await interaction.followup.send(f"Purged **{len(deleted)}** messages.", ephemeral=True)
     logger.info("purge %d: %d messages deleted in #%s by %s", count, len(deleted), channel.name, interaction.user)
+
+
+# ---------------------------------------------------------------------------
+# /scans  (fetch_elite.fetch_scan + same embeds as webhook poster)
+# ---------------------------------------------------------------------------
+
+
+@tree.command(name="scans", description="Fetch a FinViz Elite screener scan (same pipeline as post_scans_elite)")
+@app_commands.describe(scan="Preset scan to run")
+@app_commands.choices(scan=_SCAN_CHOICES)
+async def scans_command(interaction: discord.Interaction, scan: app_commands.Choice[str]):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/scans`.",
+            ephemeral=True,
+        )
+        return
+
+    scan_def = SCAN_BY_ID.get(scan.value)
+    if scan_def is None:
+        await interaction.response.send_message("Unknown scan — try again.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    try:
+        rows = await asyncio.to_thread(fetch_scan, scan_def)
+    except Exception as e:
+        logger.exception("fetch_scan failed for %s", scan.value)
+        await interaction.followup.send(f"Fetch failed: `{e}`")
+        return
+
+    embed_dicts = build_embeds(scan_def.title, rows, screener_url=scan_def.screener_url)
+    embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
+
+    await interaction.followup.send(embed=embeds[0])
+    for emb in embeds[1:]:
+        await interaction.followup.send(embed=emb)
+
+    logger.info(
+        "scans %s: %d rows, %d embed(s) for %s",
+        scan_def.scan_id,
+        len(rows),
+        len(embeds),
+        interaction.user,
+    )
 
 
 # ---------------------------------------------------------------------------
