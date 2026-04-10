@@ -17,6 +17,7 @@ import discord
 from discord.ext import commands
 
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
+from finviz_news import fetch_news
 from finviz_options import fetch_options
 from gex_compute import compute_gex
 
@@ -318,6 +319,61 @@ async def zero_dte_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.reply("Usage: `!0dte <SYMBOL>`\nExample: `!0dte AAPL`")
     else:
         logger.exception("Unhandled error in !0dte: %s", error)
+        await ctx.reply("Something went wrong. Please try again later.")
+
+
+# ---------------------------------------------------------------------------
+# !news command
+# ---------------------------------------------------------------------------
+
+@bot.command(name="news")
+async def news_command(ctx: commands.Context, symbol: str | None = None):
+    """Post the latest news articles for a ticker.
+
+    Usage:
+        !news AAPL
+    """
+    if symbol is None:
+        await ctx.reply("Usage: `!news <SYMBOL>`\nExample: `!news AAPL`")
+        return
+
+    ticker = validate_symbol(symbol)
+    if ticker is None:
+        await ctx.reply(f"`{symbol}` doesn't look like a valid ticker symbol.")
+        return
+
+    async with ctx.typing():
+        articles = await asyncio.to_thread(fetch_news, ticker, 5)
+
+    if not articles:
+        await ctx.reply(f"No news found for **{ticker}**.")
+        return
+
+    embed = discord.Embed(
+        title=f"{ticker} — Latest News",
+        color=0x9B59B6,
+        url=f"https://finviz.com/quote.ashx?t={ticker}",
+    )
+
+    for article in articles:
+        date_str = article.date.split(" ")[0] if " " in article.date else article.date
+        source_tag = f"  *— {article.source}*" if article.source else ""
+        embed.add_field(
+            name=date_str,
+            value=f"[{article.title}]({article.url}){source_tag}",
+            inline=False,
+        )
+
+    embed.set_footer(text="Data from FinViz Elite")
+    await ctx.reply(embed=embed)
+
+
+@news_command.error
+async def news_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.reply("Usage: `!news <SYMBOL>`\nExample: `!news AAPL`")
+    else:
+        logger.exception("Unhandled error in !news: %s", error)
         await ctx.reply("Something went wrong. Please try again later.")
 
 

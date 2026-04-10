@@ -16,8 +16,9 @@ A persistent Discord bot that responds to commands in real time:
 | `!gex AAPL` | Posts **GEX analysis** for AAPL (nearest future expiry with gamma data) |
 | `!gex SPY 2025-07-18` | GEX for a **specific expiration date** |
 | `!0dte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
+| `!news AAPL` | Latest **5 news articles** with clickable links |
 
-Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead).
+Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `!news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources.
 
 ### Webhook Posters
 
@@ -106,7 +107,7 @@ The free version does not need a `.env` file.
 
 ### 5. Create a Discord bot application and get the token
 
-Follow these steps to create the bot that will respond to `!chart`, `!gex`, and `!0dte` commands.
+Follow these steps to create the bot that will respond to `!chart`, `!gex`, `!0dte`, and `!news` commands.
 
 #### 5a. Create the application
 
@@ -183,6 +184,7 @@ The bot connects to Discord and stays running, listening for commands in any tex
 | `!gex <SYMBOL>` | GEX / options analysis for nearest future expiry |
 | `!gex <SYMBOL> <YYYY-MM-DD>` | GEX for a specific expiration date |
 | `!0dte <SYMBOL>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
+| `!news <SYMBOL>` | Latest 5 news articles with clickable links, dates, and sources |
 
 **Examples:**
 
@@ -195,6 +197,8 @@ The bot connects to Discord and stays running, listening for commands in any tex
 !gex SPY 2025-07-18
 !0dte AAPL
 !0dte SPY
+!news AAPL
+!news TSLA
 ```
 
 The bot replies with an embedded image (charts) or an embed with analysis fields (options). If the symbol is invalid or data can't be fetched, it replies with an error message.
@@ -217,6 +221,11 @@ If gamma data is not available in the Finviz export, the bot falls back to **OI-
 - **Top Strikes** — table of the most significant strikes by open interest.
 
 Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather than GEX.
+
+**What `!news` shows:**
+- The **5 most recent** news articles related to the ticker.
+- Each article is a **clickable link** that opens directly in your browser.
+- **Date** and **source** (e.g. Reuters, Bloomberg) are shown for each article.
 
 ### Options (webhook scripts)
 
@@ -272,9 +281,10 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, and future commands)
+  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, !news)
   finviz_chart.py        # Fetches chart images from FinViz Elite
   finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
+  finviz_news.py         # Fetches news articles from FinViz Elite news export
   gex_compute.py         # Computes GEX metrics (walls, gamma flip, net GEX)
   post_scans_elite.py    # Webhook poster — Elite version
   post_scans_free.py     # Webhook poster — Free version
@@ -307,6 +317,8 @@ PradBot-Finviz-To-Discord/
 **"No options data returned"** — The symbol may not have listed options, or the specific expiry date you entered doesn't exist for that ticker. Try without a date (`!gex AAPL`) to auto-select the nearest future expiry. The bot fetches all available expirations from the Finviz Elite export and picks the closest one after today.
 
 **"No 0DTE options data"** — The symbol doesn't have options expiring today. Not every ticker has daily expirations — most only have weekly or monthly. Try `!gex SYMBOL` instead to see the nearest available expiry.
+
+**"No news found"** — The symbol may not have any recent news articles in the FinViz database, or the API key may be invalid. Verify your `FINVIZ_API_KEY` is correct and the Elite subscription is active.
 
 **"Gamma data not available"** — The Finviz options export didn't include gamma values for the selected expiry (common for 0DTE or very near-term expirations). The bot will show OI-based walls instead. If you want gamma-based GEX, try a further-out expiry (e.g. `!gex AAPL 2025-07-18`).
 
