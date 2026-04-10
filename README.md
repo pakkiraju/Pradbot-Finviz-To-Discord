@@ -18,6 +18,7 @@ A persistent Discord bot that responds to **slash commands** in real time. All c
 | `/news AAPL` | Latest **5 news articles** with clickable links |
 | `/quote AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
 | `/scans` | Pick **All scans** or **one preset** from a dropdown — same FinViz Elite CSV pipeline as `fetch_elite.py` / `post_scans_elite.py` |
+| `/purge` | Delete messages in the channel (count or **all**, with button confirmation for **all**) |
 | `/groups Sector` | **Sector** aggregate data (market cap, P/E, change, volume, etc.) |
 | `/groups Industry Valuation` | **Industry** data with a specific view preset (dropdown menus) |
 
@@ -92,21 +93,21 @@ Open `webhooks.json` and replace the placeholder URLs with your real webhook URL
 
 You only need to include the scans you want. Any scan ID not present in `webhooks.json` will be skipped.
 
-### 4. Configure .env (Elite version only)
+### 4. Configure `.env` (FinViz Elite API key)
 
-If using the Elite version, copy the example and add your FinViz API key:
+Copy the example and add your FinViz Elite API key if you use **`post_scans_elite.py`** or any FinViz-backed **`bot.py`** commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`):
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and set your key:
+Open `.env` and set:
 
 ```
 FINVIZ_API_KEY=your_finviz_elite_api_key_here
 ```
 
-The free version does not need a `.env` file.
+The **free** webhook script (`post_scans_free.py` only) does not need `FINVIZ_API_KEY`. The Discord bot still needs **`DISCORD_BOT_TOKEN`** (see step 5b); put both variables in the same `.env` when you run `bot.py`.
 
 ### 5. Create a Discord bot application and get the token
 
@@ -169,6 +170,8 @@ python bot.py
 ```
 
 The bot connects to Discord and stays running, listening for slash commands in any text channel it has access to. You should see `Logged in as PradBot#1234` in the console when it's ready.
+
+**Environment:** `DISCORD_BOT_TOKEN` is required. `FINVIZ_API_KEY` is required for FinViz-backed commands (everything except `/purge`). Without the FinViz key, `/scans` replies with a setup hint.
 
 #### Bot commands
 
@@ -248,7 +251,7 @@ This combines `/chart`, price data, and `/news` into a single response.
 **What `/scans` shows:**
 - The same **top 50 tickers** (by daily change %) as `post_scans_elite.py`, for the scan you pick — ticker, price, change %, volume, relative volume, with an optional **View on FinViz** link on the first embed.
 - **All scans** runs the full **Included Scans** list in registry order, with a brief pause between presets (same idea as spacing in `post_scans_elite.py`). Pick a single preset when you only want one table.
-- Scan IDs match the **Included Scans** table and `webhooks.json` keys (e.g. `jeff_sun_canslim`, `earnings_calendar_week`). The **All scans** option uses the internal value `all` in the slash UI (shown as “All scans (every preset)”).
+- Scan IDs match the **Included Scans** table and `webhooks.json` keys (e.g. `jeff_sun_canslim`, `earnings_calendar_week`). In Discord, choose **All scans (every preset)** at the top of the dropdown (examples below use `scan:all` for the same option).
 
 **What `/groups` shows:**
 - Aggregate metrics for groups of stocks organized by **sector**, **industry**, **country**, or **market cap** tier.
@@ -345,6 +348,8 @@ PradBot-Finviz-To-Discord/
 **Discord 400 Bad Request** — Usually means the embed payload is too large. Each scan is capped at 50 results and embeds are sent one at a time to stay within Discord's limits, so this should be rare.
 
 **Slash commands not showing up** — Wait up to about an hour after the first sync, restart `bot.py`, and confirm the invite included **`applications.commands`** (OAuth2 URL Generator) and that the bot is still in the server. Re-authorize the invite URL if you add new scopes later.
+
+**`/scans` says to set `FINVIZ_API_KEY`** — Add your Elite API key to `.env` in the project folder (same file as `DISCORD_BOT_TOKEN`). The bot loads `.env` on startup.
 
 **"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
 
