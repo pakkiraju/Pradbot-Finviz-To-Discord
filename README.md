@@ -50,10 +50,11 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Put **both** in `.env`:
+Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for all FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`). Omit only if you truly only use `/purge` (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
+- **`GUILD_ID`** (optional) — your **server ID** if you want **instant** slash command updates while developing (see **§5** below). Leave blank for **global** registration (slower propagation, but commands work in every server without extra config).
 
 #### 3) Discord application (you are the app owner)
 
@@ -75,9 +76,31 @@ PradBot is installed **per guild** using an OAuth2 invite URL (not the same thin
 
 After this, PradBot appears in the member list (offline until you run `bot.py`). You do **not** need **Message Content Intent** for these commands (slash + buttons).
 
-#### 5) Slash command sync
+#### 5) Slash command sync (global vs guild — instant updates)
 
-On startup, `bot.py` calls global **`tree.sync()`**. Brand-new or changed commands can take **up to ~1 hour** to appear everywhere; later updates are usually faster.
+**You do not need to re-invite the bot** when you add or change commands. The delay people hit is Discord’s **global** command propagation, not the invite.
+
+| Mode | `.env` | Behavior |
+|------|--------|----------|
+| **Global** (default) | No `GUILD_ID` | `bot.py` registers commands for **all servers** the bot is in. Updates can take **up to ~1 hour** to show everywhere. |
+| **Guild (dev)** | `GUILD_ID=<your server id>` | Commands register **only in that one server**, but updates appear **within seconds** after you restart `bot.py`. |
+
+**How to get your server (guild) ID**
+
+1. In Discord, open **User Settings** (gear) → **App Settings** → **Advanced**.
+2. Turn **Developer Mode** **On**.
+3. Close settings, **right‑click your server icon** (or server name in the list) → **Copy Server ID**.
+4. Add one line to `.env`:
+
+```
+GUILD_ID=123456789012345678
+```
+
+(Use your real ID; it is usually 17–19 digits.)
+
+5. Restart `bot.py`. The console should log that commands synced **to guild** `…`. Slash changes in that server should show up almost immediately.
+
+**Production:** Remove `GUILD_ID` (or comment it out) so commands sync **globally** and every server sees them after propagation. **Development:** Keep `GUILD_ID` set so you are not waiting for global sync while iterating.
 
 #### 6) Run PradBot
 
@@ -297,7 +320,7 @@ PradBot-Finviz-To-Discord/
 
 **Webhook posters — 429 (free)** — Increase `FINVIZ_FREE_DELAY_SEC` if needed.
 
-**PradBot — slash commands missing** — Wait for global sync (~up to 1 hour first time); restart `bot.py`; invite must include **`applications.commands`**.
+**PradBot — slash commands missing** — With **global** sync (no `GUILD_ID`), wait up to ~1 hour after code changes, then restart `bot.py`. For **instant** updates, set **`GUILD_ID`** (see **§5**). Invite must include **`applications.commands`**. Re-inviting is **not** required when you add or change commands.
 
 **PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
 

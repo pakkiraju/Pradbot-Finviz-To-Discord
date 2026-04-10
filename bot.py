@@ -2,7 +2,9 @@
 
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
-Slash commands sync globally when the bot starts (new registrations may take up to ~1 hour to appear everywhere).
+
+Optional GUILD_ID: if set, slash commands sync to that server only (instant).
+If unset, commands sync globally (can take up to ~1 hour to appear everywhere).
 
 /scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py).
 """
@@ -119,8 +121,30 @@ def _webhook_embed_dict_to_discord(em: dict) -> discord.Embed:
 
 @bot.event
 async def on_ready():
-    await tree.sync()
-    logger.info("Synced slash commands globally (new commands may take up to ~1 hour to propagate)")
+    guild_id_raw = os.environ.get("GUILD_ID", "").strip()
+    if guild_id_raw:
+        try:
+            guild_id = int(guild_id_raw)
+        except ValueError:
+            logger.error(
+                "GUILD_ID must be digits only (Discord server ID), got %r — using global sync",
+                guild_id_raw,
+            )
+            await tree.sync()
+            logger.info("Synced slash commands globally (invalid GUILD_ID)")
+        else:
+            guild = discord.Object(id=guild_id)
+            tree.copy_global_to(guild=guild)
+            await tree.sync(guild=guild)
+            logger.info(
+                "Synced slash commands to guild %s (instant in this server; remove GUILD_ID for global sync)",
+                guild_id,
+            )
+    else:
+        await tree.sync()
+        logger.info(
+            "Synced slash commands globally (set GUILD_ID in .env for instant updates in one server)"
+        )
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
