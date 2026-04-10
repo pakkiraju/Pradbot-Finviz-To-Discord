@@ -36,7 +36,7 @@ Each scan is sorted by daily change % (descending) and capped at the top 50 resu
 
 ```bash
 git clone <your-repo-url>
-cd "Discord Finviz Poster"
+cd "PradBot-Finviz-To-Discord"
 pip install -r requirements.txt
 ```
 
@@ -85,6 +85,21 @@ FINVIZ_API_KEY=your_finviz_elite_api_key_here
 
 The free version does not need a `.env` file.
 
+### 5. Configure .env (Discord bot)
+
+The bot also reads from `.env`. Add your Discord bot token:
+
+```
+DISCORD_BOT_TOKEN=your_discord_bot_token_here
+```
+
+To get a token:
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and create a **New Application**.
+2. Under **Bot**, click **Reset Token** and copy the token into `.env`.
+3. Enable the **Message Content Intent** toggle (required for `!` prefix commands).
+4. Under **OAuth2 > URL Generator**, select the `bot` scope and the permissions **Send Messages**, **Attach Files**, **Embed Links**, and **Read Message History**. Use the generated URL to invite the bot to your server.
+
 ## Usage
 
 ### Free version (no API key)
@@ -99,7 +114,20 @@ python post_scans_free.py
 python post_scans_elite.py
 ```
 
-### Options
+### Discord bot
+
+```bash
+python bot.py
+```
+
+The bot stays running and listens for commands in any channel it can see:
+
+| Command | Description |
+|---|---|
+| `!chart AAPL` | Post a daily FinViz chart for the given ticker |
+| `!chart MSFT w` | Weekly chart (`d` = daily, `w` = weekly, `m` = monthly) |
+
+### Options (webhook scripts)
 
 Both scripts accept the same flags:
 
@@ -153,14 +181,16 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  post_scans_elite.py    # Entry point — Elite version
-  post_scans_free.py     # Entry point — Free version
+  bot.py                 # Discord bot entry point (!chart and future commands)
+  finviz_chart.py        # Fetches chart images from FinViz Elite
+  post_scans_elite.py    # Webhook poster — Elite version
+  post_scans_free.py     # Webhook poster — Free version
   scan_registry.py       # All scan definitions (IDs, titles, URLs)
-  fetch_elite.py         # Fetches data via FinViz Elite CSV export
-  fetch_free.py          # Fetches data via finviz Python library (HTML scraping)
+  fetch_elite.py         # Fetches scan data via FinViz Elite CSV export
+  fetch_free.py          # Fetches scan data via finviz Python library (HTML scraping)
   discord_payload.py     # Builds Discord embeds and posts to webhooks
   webhooks.example.json  # Template — copy to webhooks.json
-  .env.example           # Template — copy to .env (Elite only)
+  .env.example           # Template — copy to .env
   .gitignore             # Excludes webhooks.json, .env, __pycache__
   requirements.txt       # Python dependencies
 ```
@@ -176,6 +206,10 @@ PradBot-Finviz-To-Discord/
 **"No results for this scan"** — Some scans may legitimately return zero results on a given day depending on market conditions. This is normal.
 
 **Discord 400 Bad Request** — Usually means the embed payload is too large. Each scan is capped at 50 results and embeds are sent one at a time to stay within Discord's limits, so this should be rare.
+
+**Bot ignores `!chart` messages** — Make sure the **Message Content Intent** is enabled in the Discord Developer Portal for your bot application.
+
+**"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
 
 ## License
 
