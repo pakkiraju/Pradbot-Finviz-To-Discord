@@ -1,4 +1,4 @@
-# Discord Finviz Poster
+# PradBot-Finviz-To-Discord
 
 Posts FinViz stock screener results to Discord channels via webhooks. Each scan gets its own channel and webhook, and results are formatted as clean embedded tables.
 
@@ -152,7 +152,7 @@ The scripts run once and exit. To post daily, set up a scheduler:
 ## File Structure
 
 ```
-Discord Finviz Poster/
+PradBot-Finviz-To-Discord/
   post_scans_elite.py    # Entry point — Elite version
   post_scans_free.py     # Entry point — Free version
   scan_registry.py       # All scan definitions (IDs, titles, URLs)
