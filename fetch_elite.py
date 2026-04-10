@@ -243,7 +243,10 @@ _MOVERS_SIGNALS = {
     "losers": "ta_toplosers",
 }
 
-_MOVERS_COLUMNS = "1,2,3,4,5,6,7,47,65"
+# v=141 + this c= string matches scan_registry exports — CSV headers line up with
+# _normalize_row (Ticker, Price, Change, Volume, …). v=152 column IDs do not.
+_MOVERS_EXPORT_VIEW = "141"
+_MOVERS_COLUMNS = "1,47,61,62,63,64,65"
 
 
 def fetch_top_movers(
@@ -268,9 +271,10 @@ def fetch_top_movers(
     signal = _MOVERS_SIGNALS[kind]
     sort = "-change" if kind == "gainers" else "change"
     export_url = (
-        f"{_TOP_MOVERS_EXPORT}?v=152&s={signal}&f=geo_usa"
+        f"{_TOP_MOVERS_EXPORT}?v={_MOVERS_EXPORT_VIEW}&s={signal}&f=geo_usa"
         f"&o={sort}&c={_MOVERS_COLUMNS}"
     )
+    # Screener link: user-facing FinViz UI (v=152 custom) — data comes from export above.
     screener_url = f"{_TOP_MOVERS_SCREENER}?v=152&s={signal}&f=geo_usa"
 
     raw_rows = _fetch_csv(export_url, caller=f"top_{kind}")
