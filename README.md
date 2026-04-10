@@ -98,9 +98,11 @@ GUILD_ID=123456789012345678
 
 (Use your real ID; it is usually 17–19 digits.)
 
-5. Restart `bot.py`. The console should log that commands synced **to guild** `…`. Slash changes in that server should show up almost immediately.
+5. Restart `bot.py`. The console should log that commands synced **to guild** `…`, then **cleared global slash commands** so you do not get **two of every command** in the picker (Discord lists global and guild registrations separately; this project removes globals when `GUILD_ID` is set).
 
 **Production:** Remove `GUILD_ID` (or comment it out) so commands sync **globally** and every server sees them after propagation. **Development:** Keep `GUILD_ID` set so you are not waiting for global sync while iterating.
+
+**If you still see duplicates:** Quit and reopen Discord, or wait a minute for the client to refresh. Old guild-only copies can linger in the picker until Discord refreshes after you switch between global and guild modes.
 
 #### 6) Run PradBot
 
