@@ -5,6 +5,7 @@ Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
 """
 
 import asyncio
+import csv
 import io
 import logging
 import os
@@ -17,6 +18,7 @@ import discord
 from discord.ext import commands
 
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
+from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
 from finviz_news import fetch_news
 from finviz_options import fetch_options
 from finviz_quote import fetch_quote
@@ -472,6 +474,162 @@ async def purge_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.reply("I need **Manage Messages** and **Read Message History** permissions to purge.")
     else:
         logger.exception("Unhandled error in !purge: %s", error)
+        await ctx.reply("Something went wrong. Please try again later.")
+
+
+# ---------------------------------------------------------------------------
+# !groups command
+# ---------------------------------------------------------------------------
+
+_GROUPS_INLINE_MAX = 20
+_PRESET_NAMES = ", ".join(f"`{k}`" for k in VIEW_PRESETS)
+_GROUP_NAMES = ", ".join(f"`{g}`" for g in sorted(VALID_GROUPS))
+
+
+def _fmt_mcap(raw: str) -> str:
+    """Format a raw market cap number (in millions) into human-readable form."""
+    try:
+        val = float(raw.replace(",", ""))
+    except (ValueError, TypeError):
+        return raw
+    if val >= 1_000_000:
+        return f"{val / 1_000_000:,.2f}T"
+    if val >= 1_000:
+        return f"{val / 1_000:,.1f}B"
+    return f"{val:,.0f}M"
+
+
+def _build_groups_table(columns: list[str], rows: list[dict[str, str]], limit: int | None = None) -> str:
+    """Build a fixed-width text table from groups data."""
+    display_rows = rows[:limit] if limit else rows
+    # Skip "No." column — not useful in Discord
+    cols = [c for c in columns if c != "No."]
+
+    # Compute column widths
+    widths = {c: len(c) for c in cols}
+    formatted: list[dict[str, str]] = []
+    for row in display_rows:
+        fmt = {}
+        for c in cols:
+            val = row.get(c, "")
+            if c == "Market Cap":
+                val = _fmt_mcap(val)
+            elif c in ("Volume", "Average Volume", "Stocks"):
+                try:
+                    val = f"{float(val.replace(',', '')):,.0f}"
+                except (ValueError, TypeError):
+                    pass
+            fmt[c] = val
+            widths[c] = max(widths[c], len(val))
+        formatted.append(fmt)
+
+    header = " | ".join(c.ljust(widths[c]) for c in cols)
+    sep = "-+-".join("-" * widths[c] for c in cols)
+    lines = [header, sep]
+    for fmt in formatted:
+        lines.append(" | ".join(fmt.get(c, "").ljust(widths[c]) for c in cols))
+
+    return "\n".join(lines)
+
+
+def _rebuild_csv(columns: list[str], rows: list[dict[str, str]]) -> bytes:
+    """Rebuild CSV bytes from parsed rows for file attachment."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow(row.get(c, "") for c in columns)
+    return buf.getvalue().encode("utf-8")
+
+
+@bot.command(name="groups")
+async def groups_command(ctx: commands.Context, group: str | None = None, preset: str | None = None):
+    """Post Finviz group screener data (sector, industry, country, cap).
+
+    Usage:
+        !groups sector                — sector data (custom view)
+        !groups industry valuation    — industry data (valuation view)
+        !groups country performance   — country data (performance view)
+    """
+    if group is None:
+        await ctx.reply(
+            f"Usage: `!groups <group> [preset]`\n"
+            f"Groups: {_GROUP_NAMES}\n"
+            f"Presets: {_PRESET_NAMES} (default: `custom`)\n"
+            f"Example: `!groups sector` or `!groups industry valuation`"
+        )
+        return
+
+    group = group.lower()
+    if group not in VALID_GROUPS:
+        await ctx.reply(f"Unknown group `{group}`. Choose from: {_GROUP_NAMES}")
+        return
+
+    view_name = (preset or "custom").lower()
+    if view_name not in VIEW_PRESETS:
+        await ctx.reply(f"Unknown preset `{preset}`. Choose from: {_PRESET_NAMES}")
+        return
+    view_code = VIEW_PRESETS[view_name]
+
+    async with ctx.typing():
+        columns, rows = await asyncio.to_thread(fetch_groups, group, view_code)
+
+    if not rows:
+        await ctx.reply(f"No data returned for **{group}** ({view_name}). Check the logs for details.")
+        return
+
+    title = f"{group.title()} — {view_name.title()}"
+    embed = discord.Embed(
+        title=title,
+        color=0xF39C12,
+        url=f"https://elite.finviz.com/groups.ashx?g={group}&v={view_code}",
+    )
+
+    file = None
+    if len(rows) <= _GROUPS_INLINE_MAX:
+        table = _build_groups_table(columns, rows)
+        # Discord code block max per field is 1024; embed description max is 4096
+        if len(table) + 8 <= 4090:  # account for ```\n...\n```
+            embed.description = f"```\n{table}\n```"
+        else:
+            # Table too wide — truncate and attach CSV
+            short = _build_groups_table(columns, rows, limit=10)
+            embed.description = f"```\n{short}\n```"
+            csv_bytes = _rebuild_csv(columns, rows)
+            fname = f"groups_{group}_{view_name}.csv"
+            file = discord.File(io.BytesIO(csv_bytes), filename=fname)
+            embed.add_field(name="Full data", value=f"See attached `{fname}`", inline=False)
+    else:
+        # Large dataset — show preview + CSV attachment
+        preview = _build_groups_table(columns, rows, limit=10)
+        if len(preview) + 8 <= 4090:
+            embed.description = f"```\n{preview}\n```"
+        embed.add_field(
+            name="Rows",
+            value=f"{len(rows)} {group} groups — full data attached as CSV",
+            inline=False,
+        )
+        csv_bytes = _rebuild_csv(columns, rows)
+        fname = f"groups_{group}_{view_name}.csv"
+        file = discord.File(io.BytesIO(csv_bytes), filename=fname)
+
+    embed.set_footer(text="Data from FinViz Elite")
+
+    if file:
+        await ctx.reply(embed=embed, file=file)
+    else:
+        await ctx.reply(embed=embed)
+
+
+@groups_command.error
+async def groups_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.reply(
+            f"Usage: `!groups <group> [preset]`\n"
+            f"Groups: {_GROUP_NAMES}\nPresets: {_PRESET_NAMES}"
+        )
+    else:
+        logger.exception("Unhandled error in !groups: %s", error)
         await ctx.reply("Something went wrong. Please try again later.")
 
 

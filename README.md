@@ -18,6 +18,8 @@ A persistent Discord bot that responds to commands in real time:
 | `!0dte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
 | `!news AAPL` | Latest **5 news articles** with clickable links |
 | `!AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
+| `!groups sector` | **Sector** aggregate data (market cap, P/E, change, volume, etc.) |
+| `!groups industry valuation` | **Industry** data with a specific view preset |
 
 Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `!news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `!SYMBOL` (any valid ticker on its own) posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed.
 
@@ -189,6 +191,7 @@ The bot connects to Discord and stays running, listening for commands in any tex
 | `!purge <number>` | Delete the last N messages in the channel (requires Manage Messages) |
 | `!purge all` | Delete **all** messages in the channel (asks for confirmation) |
 | `!<SYMBOL>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
+| `!groups <group> [preset]` | Group screener data: `sector`, `industry`, `country`, or `cap` |
 
 **Examples:**
 
@@ -208,9 +211,13 @@ The bot connects to Discord and stays running, listening for commands in any tex
 !MSFT
 !AAPL
 !TSLA
+!groups sector
+!groups industry valuation
+!groups country performance
+!groups cap overview
 ```
 
-The bot replies with an embedded image (charts) or an embed with analysis fields (options). Typing just `!SYMBOL` (e.g. `!MSFT`) posts a combined quote panel with chart, price data, and news in one message. If the symbol is invalid or data can't be fetched, it replies with an error message.
+The bot replies with an embedded image (charts) or an embed with analysis fields (options). Typing just `!SYMBOL` (e.g. `!MSFT`) posts a combined quote panel with chart, price data, and news in one message. `!groups` posts aggregate metrics for sectors, industries, countries, or market cap tiers. If the symbol is invalid or data can't be fetched, it replies with an error message.
 
 **What `!gex` shows:**
 - **Net GEX** — total dealer gamma exposure across all strikes.
@@ -244,6 +251,15 @@ Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather tha
 - **Latest News** — 3 most recent headlines as clickable links.
 
 This is a shortcut that combines `!chart`, price data, and `!news` into a single response. Any valid ticker works (e.g. `!MSFT`, `!AAPL`, `!BRK.B`). Reserved command names like `chart`, `gex`, `news`, `purge`, etc. are not treated as tickers.
+
+**What `!groups` shows:**
+- Aggregate metrics for groups of stocks organized by **sector**, **industry**, **country**, or **market cap** tier.
+- Available view presets control which columns are returned:
+  - `overview` — stocks, market cap, dividend yield, P/E, forward P/E, PEG, debt ratios, analyst recom, change, volume.
+  - `valuation` — market cap, P/E, forward P/E, PEG, P/S, P/B, P/C, P/FCF, EPS growth, sales growth, change, volume.
+  - `performance` — weekly/monthly/quarterly/half-year/yearly/YTD performance, avg volume, relative volume, change, volume.
+  - `custom` (default) — market cap, P/E, dividend yield, avg volume, change, volume, stocks.
+- Small groups (e.g. sector with ~11 rows) are displayed inline as a monospace table. Large groups (e.g. industry with ~140+ rows) include a preview table and attach the full data as a CSV file.
 
 ### Options (webhook scripts)
 
@@ -299,8 +315,9 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, !news, !SYMBOL)
+  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, !news, !SYMBOL, !groups)
   finviz_chart.py        # Fetches chart images from FinViz Elite
+  finviz_groups.py       # Fetches group screener data from FinViz Elite groups export
   finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
   finviz_news.py         # Fetches news articles from FinViz Elite news export
   finviz_quote.py        # Fetches OHLCV quote history from FinViz Elite quote export
