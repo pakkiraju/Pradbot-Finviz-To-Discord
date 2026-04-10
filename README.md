@@ -129,32 +129,23 @@ DISCORD_BOT_TOKEN=paste_your_token_here
 
 > **Keep this token secret.** Anyone with the token can control your bot. If it leaks, click **Reset Token** immediately to generate a new one.
 
-#### 5c. Invite the bot to your server
+#### 5c. Invite the bot with full server access
+
+Use one invite that grants the bot everything it needs (charts, embeds, `/purge`, channel tools, slash commands):
 
 1. In the left sidebar, click **OAuth2 > URL Generator**.
 2. Under **Scopes**, check **`bot`** and **`applications.commands`** (required for slash commands).
-3. Under **Bot Permissions**, check:
-   - **Send Messages**
-   - **Attach Files**
-   - **Embed Links**
-   - **Read Message History**
-   - **Manage Messages** (for `/purge`)
-   - **Use Slash Commands**
+3. Under **Bot Permissions**, enable **Administrator**. That single toggle covers posting charts and embeds, reading history, managing messages for `/purge`, and all other bot features without micromanaging individual checkboxes.
 4. Copy the generated URL at the bottom and open it in your browser.
-5. Select your Discord server from the dropdown and click **Authorize**.
+5. Pick your server and click **Authorize**. Discord may ask you to confirm **bot** and **application commands** access for that server — approve both so `/` commands register and autocomplete.
 
-The bot will now appear in your server's member list (offline until you start `bot.py`).
+The bot will appear in your member list (offline until you start `bot.py`).
 
-> **Note:** The bot no longer requires the **Message Content Intent** since it uses slash commands instead of prefix commands.
+> **Note:** The bot does not need the **Message Content Intent** (slash commands and `/purge all` button confirmations do not require reading normal message text).
 
 #### 5d. Slash command sync
 
-When the bot starts, it syncs slash commands with Discord. There are two modes:
-
-- **Guild sync (instant, for development):** Set `GUILD_ID=your_server_id` in `.env`. Commands appear immediately in that server.
-- **Global sync (default):** Commands are registered globally but may take up to 1 hour to propagate to all servers.
-
-For development, guild sync is recommended so you can test changes instantly.
+When `bot.py` starts, it registers slash commands **globally**. The first time you add or change commands, Discord can take **up to about an hour** for them to show up in every server; after that, updates are usually quick. If `/` commands already appear and autocomplete, you are set.
 
 ## Usage
 
@@ -189,7 +180,7 @@ All commands use Discord's `/` slash command system. Parameters with dropdowns a
 | `/zerodte <symbol>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
 | `/news <symbol>` | Latest 5 news articles with clickable links, dates, and sources |
 | `/quote <symbol>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
-| `/purge <amount>` | Delete messages in the channel (number or "all"; requires Manage Messages) |
+| `/purge <amount>` | Delete messages in the channel (number or **all**; **all** uses **Yes / Cancel** buttons to confirm; requires Manage Messages) |
 | `/groups <group> [preset]` | Group screener data (**group** dropdown: Sector, Industry, Country, Market Cap; **preset** dropdown: Custom, Overview, Valuation, Performance) |
 
 **Examples:**
@@ -343,7 +334,7 @@ PradBot-Finviz-To-Discord/
 
 **Discord 400 Bad Request** — Usually means the embed payload is too large. Each scan is capped at 50 results and embeds are sent one at a time to stay within Discord's limits, so this should be rare.
 
-**Slash commands not showing up** — After starting the bot, global slash commands can take up to 1 hour to appear in Discord. For instant sync, set `GUILD_ID=your_server_id` in `.env`. Also ensure you invited the bot with the `applications.commands` scope.
+**Slash commands not showing up** — Wait up to about an hour after the first sync, restart `bot.py`, and confirm the invite included **`applications.commands`** (OAuth2 URL Generator) and that the bot is still in the server. Re-authorize the invite URL if you add new scopes later.
 
 **"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
 

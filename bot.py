@@ -2,7 +2,7 @@
 
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
-Optional: GUILD_ID for instant guild-scoped command sync during development.
+Slash commands sync globally when the bot starts (new registrations may take up to ~1 hour to appear everywhere).
 """
 
 import asyncio
@@ -68,15 +68,8 @@ tree = app_commands.CommandTree(bot)
 
 @bot.event
 async def on_ready():
-    guild_id = os.environ.get("GUILD_ID", "").strip()
-    if guild_id:
-        guild = discord.Object(id=int(guild_id))
-        tree.copy_global_to(guild=guild)
-        await tree.sync(guild=guild)
-        logger.info("Synced slash commands to guild %s", guild_id)
-    else:
-        await tree.sync()
-        logger.info("Synced slash commands globally (may take up to 1 hour)")
+    await tree.sync()
+    logger.info("Synced slash commands globally (new commands may take up to ~1 hour to propagate)")
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
@@ -331,6 +324,36 @@ async def news_command(interaction: discord.Interaction, symbol: str):
 # /purge
 # ---------------------------------------------------------------------------
 
+
+class PurgeAllConfirmView(discord.ui.View):
+    """Confirm delete-all using buttons. Text 'yes' replies fail without Message Content intent."""
+
+    def __init__(self, invoker_id: int):
+        super().__init__(timeout=15.0)
+        self.invoker_id = invoker_id
+        self.choice: bool | None = None  # True=purge, False=cancel, None=timeout
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "Only the person who ran `/purge` can use these buttons.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, delete all", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.choice = True
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.choice = False
+        await interaction.response.edit_message(content="Purge cancelled.", view=None)
+        self.stop()
+
+
 @tree.command(name="purge", description="Delete messages from the current channel")
 @app_commands.describe(amount='Number of messages to delete, or "all"')
 @app_commands.default_permissions(manage_messages=True)
@@ -349,22 +372,22 @@ async def purge_command(interaction: discord.Interaction, amount: str):
         return
 
     if amount.lower() == "all":
+        view = PurgeAllConfirmView(interaction.user.id)
         await interaction.response.send_message(
-            "Are you sure you want to delete **all** messages in this channel? "
-            "Reply `yes` within 15 seconds to confirm.",
+            "Are you sure you want to delete **all** messages in this channel?\n"
+            "Click **Yes, delete all** within 15 seconds to confirm.",
+            view=view,
         )
-
-        def check(m: discord.Message) -> bool:
-            return (
-                m.author == interaction.user
-                and m.channel == channel
-                and m.content.strip().lower() in ("yes", "y")
-            )
-
-        try:
-            await bot.wait_for("message", check=check, timeout=15.0)
-        except asyncio.TimeoutError:
-            await interaction.edit_original_response(content="Purge cancelled (timed out).")
+        await view.wait()
+        if view.choice is None:
+            try:
+                await interaction.edit_original_response(
+                    content="Purge cancelled (timed out).", view=None
+                )
+            except discord.HTTPException:
+                pass
+            return
+        if view.choice is False:
             return
 
         deleted = await channel.purge(limit=None)
