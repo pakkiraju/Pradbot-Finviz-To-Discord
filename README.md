@@ -13,8 +13,10 @@ A persistent Discord bot that responds to commands in real time:
 | `!chart AAPL` | Posts a **daily** FinViz candlestick chart for AAPL |
 | `!chart MSFT w` | Posts a **weekly** chart (`d` = daily, `w` = weekly, `m` = monthly) |
 | `!chart TSLA m` | Posts a **monthly** chart |
+| `!gex AAPL` | Posts **GEX analysis** for AAPL (nearest expiry) |
+| `!gex SPY 2025-07-18` | GEX for a **specific expiration date** |
 
-Charts are fetched from FinViz Elite as full-size PNG images and posted as embedded attachments with a link back to the stock's FinViz page. More commands will be added in future updates.
+Charts are fetched from FinViz Elite as full-size PNG images. GEX analysis pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table — all posted as a Discord embed.
 
 ### Webhook Posters
 
@@ -103,7 +105,7 @@ The free version does not need a `.env` file.
 
 ### 5. Create a Discord bot application and get the token
 
-Follow these steps to create the bot that will respond to `!chart` commands.
+Follow these steps to create the bot that will respond to `!chart` and `!gex` commands.
 
 #### 5a. Create the application
 
@@ -177,6 +179,8 @@ The bot connects to Discord and stays running, listening for commands in any tex
 | `!chart <SYMBOL> d` | Daily chart (same as above — `d` is the default) |
 | `!chart <SYMBOL> w` | Weekly chart |
 | `!chart <SYMBOL> m` | Monthly chart |
+| `!gex <SYMBOL>` | GEX / options analysis for nearest expiry |
+| `!gex <SYMBOL> <YYYY-MM-DD>` | GEX for a specific expiration date |
 
 **Examples:**
 
@@ -185,9 +189,21 @@ The bot connects to Discord and stays running, listening for commands in any tex
 !chart MSFT w
 !chart TSLA m
 !chart BRK.B
+!gex AAPL
+!gex SPY 2025-07-18
 ```
 
-The bot replies with an embedded image and a link to the ticker's FinViz page. If the symbol is invalid or the chart can't be fetched, it replies with an error message instead.
+The bot replies with an embedded image (charts) or an embed with GEX fields (options analysis). If the symbol is invalid or data can't be fetched, it replies with an error message.
+
+**What `!gex` shows:**
+- **Net GEX** — total dealer gamma exposure across all strikes.
+- **Call Wall** — strike with the largest positive gamma exposure (resistance).
+- **Put Wall** — strike with the largest negative gamma exposure (support).
+- **Gamma Flip** — strike where cumulative GEX crosses zero (trend inflection point).
+- **P/C Ratio** — put-to-call open interest ratio.
+- **Top Strikes** — table of the most significant strikes by GEX magnitude.
+
+If gamma data is not available in the Finviz export, the bot falls back to **OI-based walls** and labels them accordingly.
 
 ### Options (webhook scripts)
 
@@ -243,8 +259,10 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (!chart and future commands)
+  bot.py                 # Discord bot entry point (!chart, !gex, and future commands)
   finviz_chart.py        # Fetches chart images from FinViz Elite
+  finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
+  gex_compute.py         # Computes GEX metrics (walls, gamma flip, net GEX)
   post_scans_elite.py    # Webhook poster — Elite version
   post_scans_free.py     # Webhook poster — Free version
   scan_registry.py       # All scan definitions (IDs, titles, URLs)
@@ -272,6 +290,10 @@ PradBot-Finviz-To-Discord/
 **Bot ignores `!chart` messages** — Make sure the **Message Content Intent** is enabled in the Discord Developer Portal for your bot application.
 
 **"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
+
+**"No options data returned"** — The symbol may not have listed options, or the expiry date is invalid. Try without a date (`!gex AAPL`) to use the nearest available expiry.
+
+**"Gamma data not available"** — The Finviz options export didn't include gamma values. The bot will show OI-based walls instead. This is a Finviz data limitation, not a bug.
 
 ## License
 
