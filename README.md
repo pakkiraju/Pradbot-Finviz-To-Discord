@@ -1,8 +1,24 @@
 # PradBot-Finviz-To-Discord
 
-Posts FinViz stock screener results to Discord channels via webhooks. Each scan gets its own channel and webhook, and results are formatted as clean embedded tables.
+A Discord bot and webhook toolkit that brings FinViz data into your Discord server.
 
-Two versions are included:
+## Features
+
+### Discord Bot (`bot.py`)
+
+A persistent Discord bot that responds to commands in real time:
+
+| Command | What it does |
+|---|---|
+| `!chart AAPL` | Posts a **daily** FinViz candlestick chart for AAPL |
+| `!chart MSFT w` | Posts a **weekly** chart (`d` = daily, `w` = weekly, `m` = monthly) |
+| `!chart TSLA m` | Posts a **monthly** chart |
+
+Charts are fetched from FinViz Elite as full-size PNG images and posted as embedded attachments with a link back to the stock's FinViz page. More commands will be added in future updates.
+
+### Webhook Posters
+
+Scheduled scripts that post FinViz screener scan results to Discord channels via webhooks. Each scan gets its own channel and webhook, and results are formatted as clean embedded tables.
 
 - **Elite** (`post_scans_elite.py`) — Uses a FinViz Elite API key for fast, reliable CSV exports. Recommended if you have a paid FinViz subscription.
 - **Free** (`post_scans_free.py`) — Scrapes the public finviz.com screener pages using the [unofficial finviz Python API](https://github.com/mariostoev/finviz). No API key needed, but runs slower due to rate-limit-safe delays.
@@ -85,20 +101,51 @@ FINVIZ_API_KEY=your_finviz_elite_api_key_here
 
 The free version does not need a `.env` file.
 
-### 5. Configure .env (Discord bot)
+### 5. Create a Discord bot application and get the token
 
-The bot also reads from `.env`. Add your Discord bot token:
+Follow these steps to create the bot that will respond to `!chart` commands.
+
+#### 5a. Create the application
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Click **New Application** in the top-right corner.
+3. Give it a name (e.g. `PradBot`) and click **Create**.
+
+#### 5b. Get the bot token
+
+1. In the left sidebar, click **Bot**.
+2. Click **Reset Token** (or **Copy** if this is a fresh app) to reveal the bot token.
+3. Copy the token and paste it into your `.env` file:
 
 ```
-DISCORD_BOT_TOKEN=your_discord_bot_token_here
+DISCORD_BOT_TOKEN=paste_your_token_here
 ```
 
-To get a token:
+> **Keep this token secret.** Anyone with the token can control your bot. If it leaks, click **Reset Token** immediately to generate a new one.
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and create a **New Application**.
-2. Under **Bot**, click **Reset Token** and copy the token into `.env`.
-3. Enable the **Message Content Intent** toggle (required for `!` prefix commands).
-4. Under **OAuth2 > URL Generator**, select the `bot` scope and the permissions **Send Messages**, **Attach Files**, **Embed Links**, and **Read Message History**. Use the generated URL to invite the bot to your server.
+#### 5c. Enable the Message Content Intent
+
+The bot uses prefix commands (`!chart`) which require reading message content. This is a privileged intent that must be turned on manually:
+
+1. Still on the **Bot** page, scroll down to **Privileged Gateway Intents**.
+2. Toggle **Message Content Intent** to **ON**.
+3. Click **Save Changes**.
+
+Without this, the bot will connect but silently ignore all `!` commands.
+
+#### 5d. Invite the bot to your server
+
+1. In the left sidebar, click **OAuth2 > URL Generator**.
+2. Under **Scopes**, check **`bot`**.
+3. Under **Bot Permissions**, check:
+   - **Send Messages**
+   - **Attach Files**
+   - **Embed Links**
+   - **Read Message History**
+4. Copy the generated URL at the bottom and open it in your browser.
+5. Select your Discord server from the dropdown and click **Authorize**.
+
+The bot will now appear in your server's member list (offline until you start `bot.py`).
 
 ## Usage
 
@@ -120,12 +167,27 @@ python post_scans_elite.py
 python bot.py
 ```
 
-The bot stays running and listens for commands in any channel it can see:
+The bot connects to Discord and stays running, listening for commands in any text channel it has access to. You should see `Logged in as PradBot#1234` in the console when it's ready.
+
+#### Bot commands
 
 | Command | Description |
 |---|---|
-| `!chart AAPL` | Post a daily FinViz chart for the given ticker |
-| `!chart MSFT w` | Weekly chart (`d` = daily, `w` = weekly, `m` = monthly) |
+| `!chart <SYMBOL>` | Post a daily FinViz candlestick chart for the given ticker |
+| `!chart <SYMBOL> d` | Daily chart (same as above — `d` is the default) |
+| `!chart <SYMBOL> w` | Weekly chart |
+| `!chart <SYMBOL> m` | Monthly chart |
+
+**Examples:**
+
+```
+!chart AAPL
+!chart MSFT w
+!chart TSLA m
+!chart BRK.B
+```
+
+The bot replies with an embedded image and a link to the ticker's FinViz page. If the symbol is invalid or the chart can't be fetched, it replies with an error message instead.
 
 ### Options (webhook scripts)
 
@@ -163,7 +225,7 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```bash
 # Post at 4:30 PM ET every weekday (adjust timezone as needed)
-30 16 * * 1-5 cd /path/to/Discord\ Finviz\ Poster && python post_scans_free.py
+30 16 * * 1-5 cd /path/to/PradBot-Finviz-To-Discord && python post_scans_free.py
 ```
 
 ## Free vs Elite: Differences
