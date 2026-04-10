@@ -98,11 +98,13 @@ GUILD_ID=123456789012345678
 
 (Use your real ID; it is usually 17–19 digits.)
 
-5. Restart `bot.py`. The console should log that commands synced **to guild** `…`, then **cleared global slash commands** so you do not get **two of every command** in the picker (Discord lists global and guild registrations separately; this project removes globals when `GUILD_ID` is set).
+5. Restart `bot.py`. The console should log that commands synced **to guild** `…`. Slash commands appear **only in that server** — the ID in `.env` must be the server you are typing in.
 
-**Production:** Remove `GUILD_ID` (or comment it out) so commands sync **globally** and every server sees them after propagation. **Development:** Keep `GUILD_ID` set so you are not waiting for global sync while iterating.
+**Production:** Remove `GUILD_ID` (or comment it out) so commands sync **globally** and every server sees them after propagation (may take up to ~1 hour). **Development:** Keep `GUILD_ID` set to **that server’s** ID for instant updates.
 
-**If you still see duplicates:** Quit and reopen Discord, or wait a minute for the client to refresh. Old guild-only copies can linger in the picker until Discord refreshes after you switch between global and guild modes.
+**Re-invited the bot or joined a new server and see no commands?** With `GUILD_ID` set, commands exist **only** for that ID. Copy the **new** server’s ID (Developer Mode → right‑click server → Copy Server ID) and update `GUILD_ID`, then restart `bot.py`. Or remove `GUILD_ID` to use global registration so every server gets commands.
+
+**Duplicate `/command` lines (two of each):** Discord can show both **global** and **guild** registrations. After `GUILD_ID` is correct, you can set **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1`** in `.env` and restart once to clear globals (optional; see `.env.example`). Do not enable until `GUILD_ID` matches your dev server, or you can strand servers with no commands.
 
 #### 6) Run PradBot
 
@@ -322,7 +324,7 @@ PradBot-Finviz-To-Discord/
 
 **Webhook posters — 429 (free)** — Increase `FINVIZ_FREE_DELAY_SEC` if needed.
 
-**PradBot — slash commands missing** — With **global** sync (no `GUILD_ID`), wait up to ~1 hour after code changes, then restart `bot.py`. For **instant** updates, set **`GUILD_ID`** (see **§5**). Invite must include **`applications.commands`**. Re-inviting is **not** required when you add or change commands.
+**PradBot — slash commands missing** — With **global** sync (no `GUILD_ID`), wait up to ~1 hour after code changes, then restart `bot.py`. If **`GUILD_ID` is set**, commands exist **only on that server** — update the ID if you moved servers. Invite must include **`applications.commands`**. If globals were cleared earlier, comment out **`GUILD_ID`**, restart once to restore global commands, or fix **`GUILD_ID`** and restart.
 
 **PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
 

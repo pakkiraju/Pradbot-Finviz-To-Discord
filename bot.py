@@ -136,15 +136,23 @@ async def on_ready():
             guild = discord.Object(id=guild_id)
             tree.copy_global_to(guild=guild)
             await tree.sync(guild=guild)
-            # Discord shows duplicate /command entries if both global and guild commands exist.
-            # Wipe global registrations so only the guild copy remains (dev workflow).
-            app_id = bot.application_id
-            if app_id is not None:
-                try:
-                    await bot.http.bulk_upsert_global_commands(app_id, [])
-                    logger.info("Cleared global slash commands (GUILD_ID set — no duplicate entries)")
-                except discord.HTTPException as e:
-                    logger.warning("Could not clear global slash commands: %s", e)
+            # Optional: remove global slash registrations so the picker does not list each command twice
+            # (global + guild). Only enable after GUILD_ID matches the server you use — clearing globals
+            # with a wrong GUILD_ID or a new server leaves other servers with no commands until global sync.
+            if os.environ.get("SLASH_CLEAR_GLOBAL_FOR_DEDUPE", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                app_id = bot.application_id
+                if app_id is not None:
+                    try:
+                        await bot.http.bulk_upsert_global_commands(app_id, [])
+                        logger.info(
+                            "Cleared global slash commands (SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1)"
+                        )
+                    except discord.HTTPException as e:
+                        logger.warning("Could not clear global slash commands: %s", e)
             logger.info(
                 "Synced slash commands to guild %s (instant in this server; remove GUILD_ID for global sync)",
                 guild_id,
