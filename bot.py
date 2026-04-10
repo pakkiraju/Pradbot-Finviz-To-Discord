@@ -70,10 +70,26 @@ intents = discord.Intents.default()
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
+_SCAN_ALL_VALUE = "all"
+
 _SCAN_CHOICES = [
-    app_commands.Choice(name=s.title[:100], value=s.scan_id)
-    for s in SCANS
+    app_commands.Choice(name="All scans (every preset)", value=_SCAN_ALL_VALUE),
+    *[app_commands.Choice(name=s.title[:100], value=s.scan_id) for s in SCANS],
 ]
+
+# Match post_scans_elite.py spacing between webhook posts
+_SCANS_ALL_DELAY_SEC = 1.5
+
+
+async def _followup_scan_embeds(interaction: discord.Interaction, scan_def) -> tuple[int, int]:
+    """Fetch one scan and post embed(s). Returns (row_count, embed_count)."""
+    rows = await asyncio.to_thread(fetch_scan, scan_def)
+    embed_dicts = build_embeds(scan_def.title, rows, screener_url=scan_def.screener_url)
+    embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
+    await interaction.followup.send(embed=embeds[0])
+    for emb in embeds[1:]:
+        await interaction.followup.send(embed=emb)
+    return len(rows), len(embeds)
 
 
 def _webhook_embed_dict_to_discord(em: dict) -> discord.Embed:
@@ -460,14 +476,46 @@ async def purge_command(interaction: discord.Interaction, amount: str):
 # ---------------------------------------------------------------------------
 
 
-@tree.command(name="scans", description="Fetch a FinViz Elite screener scan (same pipeline as post_scans_elite)")
-@app_commands.describe(scan="Preset scan to run")
+@tree.command(name="scans", description="Fetch FinViz Elite screener scan(s) (same pipeline as post_scans_elite)")
+@app_commands.describe(scan="One preset, or All scans to run every preset in order")
 @app_commands.choices(scan=_SCAN_CHOICES)
 async def scans_command(interaction: discord.Interaction, scan: app_commands.Choice[str]):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
             "Set **FINVIZ_API_KEY** in `.env` to use `/scans`.",
             ephemeral=True,
+        )
+        return
+
+    if scan.value == _SCAN_ALL_VALUE:
+        await interaction.response.defer()
+        n = len(SCANS)
+        await interaction.followup.send(
+            f"Running **{n}** FinViz Elite scans — results post below in order (several minutes; FinViz spacing between scans)."
+        )
+        ok = 0
+        errors = 0
+        for idx, scan_def in enumerate(SCANS):
+            try:
+                row_count, emb_count = await _followup_scan_embeds(interaction, scan_def)
+                ok += 1
+                logger.info(
+                    "scans all [%s]: %d rows, %d embed(s) — %s",
+                    scan_def.scan_id,
+                    row_count,
+                    emb_count,
+                    interaction.user,
+                )
+            except Exception as e:
+                logger.exception("fetch_scan failed for %s (all)", scan_def.scan_id)
+                errors += 1
+                await interaction.followup.send(
+                    f"**{scan_def.title}** — failed: `{e}`"
+                )
+            if idx < n - 1:
+                await asyncio.sleep(_SCANS_ALL_DELAY_SEC)
+        await interaction.followup.send(
+            f"**All scans finished.** Completed **{ok}**/{n}" + (f", **{errors}** error(s)." if errors else ".")
         )
         return
 
@@ -478,24 +526,17 @@ async def scans_command(interaction: discord.Interaction, scan: app_commands.Cho
 
     await interaction.response.defer()
     try:
-        rows = await asyncio.to_thread(fetch_scan, scan_def)
+        row_count, emb_count = await _followup_scan_embeds(interaction, scan_def)
     except Exception as e:
         logger.exception("fetch_scan failed for %s", scan.value)
         await interaction.followup.send(f"Fetch failed: `{e}`")
         return
 
-    embed_dicts = build_embeds(scan_def.title, rows, screener_url=scan_def.screener_url)
-    embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
-
-    await interaction.followup.send(embed=embeds[0])
-    for emb in embeds[1:]:
-        await interaction.followup.send(embed=emb)
-
     logger.info(
         "scans %s: %d rows, %d embed(s) for %s",
         scan_def.scan_id,
-        len(rows),
-        len(embeds),
+        row_count,
+        emb_count,
         interaction.user,
     )
 
