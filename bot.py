@@ -28,6 +28,7 @@ from finviz_news import fetch_news
 from finviz_options import fetch_options
 from finviz_quote import fetch_quote
 from gex_compute import compute_gex
+from ev_position_sizing import compute as ev_compute, SizingError, EVResult
 from scan_registry import SCAN_BY_ID, SCANS
 
 # ---------------------------------------------------------------------------
@@ -757,6 +758,122 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
         await interaction.followup.send(embed=embed, file=file)
     else:
         await interaction.followup.send(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# /evsize  (EV grade + Kelly-based position sizing)
+# ---------------------------------------------------------------------------
+
+_SIDE_CHOICES = [
+    app_commands.Choice(name="Long", value="long"),
+    app_commands.Choice(name="Short", value="short"),
+]
+
+_GRADE_COLORS = {
+    "A+": 0x00C853, "A": 0x00E676, "A-": 0x69F0AE,
+    "B+": 0xFFD600, "B": 0xFFEA00, "B-": 0xFFF176,
+    "C": 0xFF9100, "D": 0xFF1744,
+}
+
+
+def _pct(v: float) -> str:
+    return f"{v * 100:+.2f}%"
+
+
+def _build_ev_embed(r: EVResult) -> discord.Embed:
+    color = _GRADE_COLORS.get(r.grade, 0x546E7A)
+    title = f"EV Grade: {r.grade}  —  {r.side.upper()} @ ${r.entry:,.2f}"
+
+    embed = discord.Embed(title=title, color=color)
+
+    embed.add_field(
+        name="Setup",
+        value=(
+            f"**Side:** {r.side.capitalize()}\n"
+            f"**Entry:** ${r.entry:,.2f}\n"
+            f"**Target:** ${r.target:,.2f}\n"
+            f"**Stop:** ${r.stop:,.2f}\n"
+            f"**Win prob:** {r.probability:.1f}%"
+        ),
+        inline=True,
+    )
+
+    embed.add_field(
+        name="Risk / Reward",
+        value=(
+            f"**Reward (R):** ${r.reward:,.2f}\n"
+            f"**Risk (L):** ${r.risk:,.2f}\n"
+            f"**R:L ratio:** {r.b:.2f}\n"
+            f"**EV / share:** ${r.ev_per_share:,.4f}\n"
+            f"**EV/R:** {_pct(r.evr)}"
+        ),
+        inline=True,
+    )
+
+    if r.f_kelly <= 0:
+        sizing_text = (
+            "**Full Kelly:** 0% (no edge)\n"
+            "**Suggested risk:** $0.00\n"
+            "**Shares:** 0\n\n"
+            "This setup has **no positive expected value** under the given probability. "
+            "Consider passing or improving the R:L ratio."
+        )
+    else:
+        sizing_text = (
+            f"**Full Kelly:** {_pct(r.f_kelly)}\n"
+            f"**¼ Kelly used:** {_pct(r.f_trade)}\n"
+            f"**Daily budget:** ${r.daily_risk:,.2f}\n"
+            f"**Suggested risk:** ${r.suggested_risk:,.2f}\n"
+            f"**Shares:** {r.shares:,}"
+        )
+
+    embed.add_field(name="Position Sizing", value=sizing_text, inline=False)
+
+    embed.set_footer(
+        text="Educational tool only — not financial advice. Uses ¼ Kelly with 50% single-trade cap."
+    )
+    return embed
+
+
+@tree.command(name="evsize", description="EV grade and position sizing for a trade setup")
+@app_commands.describe(
+    side="Long or Short",
+    entry="Entry price",
+    target="Target price",
+    stop="Stop-loss price",
+    probability="Win probability (0-100%)",
+    daily_risk="Max loss budget for the day in USD",
+)
+@app_commands.choices(side=_SIDE_CHOICES)
+async def evsize_command(
+    interaction: discord.Interaction,
+    side: app_commands.Choice[str],
+    entry: float,
+    target: float,
+    stop: float,
+    probability: float,
+    daily_risk: float,
+):
+    try:
+        result = ev_compute(
+            side=side.value,
+            entry=entry,
+            target=target,
+            stop=stop,
+            probability=probability,
+            daily_risk=daily_risk,
+        )
+    except SizingError as e:
+        await interaction.response.send_message(str(e), ephemeral=True)
+        return
+
+    embed = _build_ev_embed(result)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    logger.info(
+        "evsize %s entry=%.2f target=%.2f stop=%.2f prob=%.1f risk=%.2f -> grade=%s $%.2f by %s",
+        result.side, entry, target, stop, probability, daily_risk,
+        result.grade, result.suggested_risk, interaction.user,
+    )
 
 
 # ---------------------------------------------------------------------------

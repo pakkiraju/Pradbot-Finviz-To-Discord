@@ -26,10 +26,11 @@ Interactive **slash-command** bot: charts, options, news, quotes, group screens,
 | `/news AAPL` | Latest **5** news links |
 | `/quote AAPL` | Chart + OHLCV + change + recent days + headlines |
 | `/scans` | **All scans** or **one** preset (FinViz Elite CSV + same embed style as Elite webhook poster) |
+| `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
 | `/groups Sector` | Sector / industry / country / cap aggregates |
 
-Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`** only needs Discord permissions.
+Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`** and **`/evsize`** only need Discord permissions (no FinViz key).
 
 ### PradBot — setup
 
@@ -95,6 +96,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/zerodte <symbol>` | 0DTE analysis |
 | `/news <symbol>` | 5 articles with links |
 | `/quote <symbol>` | Quote panel + chart + news |
+| `/evsize <side> <entry> <target> <stop> <probability> <daily_risk>` | EV grade (A+ … D) + Kelly-based position sizing (ephemeral reply) |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
 | `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
 | `/groups <group> [preset]` | Groups export (**group** / **preset** dropdowns) |
@@ -110,6 +112,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /quote symbol:MSFT
 /purge amount:10
 /purge amount:all
+/evsize side:Long entry:185.00 target:195.00 stop:182.00 probability:55 daily_risk:1000
+/evsize side:Short entry:420.00 target:400.00 stop:430.00 probability:60 daily_risk:2000
 /scans scan:all
 /scans scan:jeff_sun_canslim
 /groups group:Sector
@@ -121,6 +125,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 **What `/gex` shows:** Net GEX, call/put walls, gamma flip, P/C ratio, top strikes (OI fallback if no gamma).
 
 **What `/zerodte` shows:** Call/put OI walls, P/C, total OI, top strikes.
+
+**What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Computes reward (R), risk (L), R:L ratio, EV per share, EV/R, full Kelly fraction, and applies **¼ Kelly** (capped at 50% of daily budget) to suggest a dollar risk for the trade and approximate share count. Grades the setup **A+ through D** based on EV/R. Reply is **ephemeral** (only visible to you). No FinViz key needed. Educational tool, not financial advice.
 
 **What `/news` / `/quote` / `/groups` show:** As before (headlines, combined panel, group tables / CSV when large).
 
@@ -243,6 +249,7 @@ PradBot-Finviz-To-Discord/
 
   # PradBot
   bot.py                 # PradBot entry (slash commands)
+  ev_position_sizing.py  # EV grade + Kelly position sizing (/evsize)
 
   # Webhook posters
   post_scans_elite.py
