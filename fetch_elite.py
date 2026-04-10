@@ -249,6 +249,23 @@ _MOVERS_EXPORT_VIEW = "141"
 _MOVERS_COLUMNS = "1,47,61,62,63,64,65"
 
 
+def _movers_volume_csv_to_shares(raw) -> float | None:
+    """Convert FinViz Volume cell to share count for filtering / display.
+
+    Elite screener exports often list **daily volume in thousands** (e.g. cell 1500 = 1.5M shares).
+    Users pass *min_volume* in **actual shares** (e.g. 1_000_000). Set
+    FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares in .env if your export already uses full shares.
+    """
+    n = _parse_num(raw)
+    if n is None:
+        return None
+    unit = os.environ.get("FINVIZ_MOVERS_VOLUME_CSV_UNIT", "thousands").strip().lower()
+    if unit in ("shares", "full", "1", "raw"):
+        return n
+    # default: thousands (FinViz-style)
+    return n * 1000.0
+
+
 def fetch_top_movers(
     kind: str,
     *,
@@ -271,11 +288,11 @@ def fetch_top_movers(
     signal = _MOVERS_SIGNALS[kind]
     sort = "-change" if kind == "gainers" else "change"
     export_url = (
-        f"{_TOP_MOVERS_EXPORT}?v={_MOVERS_EXPORT_VIEW}&s={signal}&f=geo_usa"
+        f"{_TOP_MOVERS_EXPORT}?v={_MOVERS_EXPORT_VIEW}&s={signal}"
         f"&o={sort}&c={_MOVERS_COLUMNS}"
     )
     # Screener link: user-facing FinViz UI (v=152 custom) — data comes from export above.
-    screener_url = f"{_TOP_MOVERS_SCREENER}?v=152&s={signal}&f=geo_usa"
+    screener_url = f"{_TOP_MOVERS_SCREENER}?v=152&s={signal}"
 
     raw_rows = _fetch_csv(export_url, caller=f"top_{kind}")
     rows: list[dict] = []
@@ -288,9 +305,13 @@ def fetch_top_movers(
             if p is None or p < min_price:
                 continue
         if min_volume is not None:
-            v = _parse_num(normed.get("volume"))
-            if v is None or v < min_volume:
+            v_shares = _movers_volume_csv_to_shares(normed.get("volume"))
+            if v_shares is None or v_shares < float(min_volume):
                 continue
+        # Show volume in the embed as full share count when CSV is thousands.
+        vs = _movers_volume_csv_to_shares(normed.get("volume"))
+        if vs is not None:
+            normed["volume"] = f"{int(round(vs)):,}"
         rows.append(normed)
 
     reverse = kind == "gainers"

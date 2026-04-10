@@ -26,26 +26,26 @@ SCANS: list[ScanDef] = [
         scan_id="qulla_episodic",
         title="Qullamaggie \u2014 Episodic Pivot",
         export_urls=[
-            "https://elite.finviz.com/export.ashx?v=141&f=geo_usa,ta_gap_u10,sh_relvol_o2,sh_price_o1,sh_avgvol_o1000&o=-change&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=ta_gap_u10,sh_relvol_o2,sh_price_o1,sh_avgvol_o1000&o=-change&c=1,47,61,62,63,64,65",
         ],
-        screener_url="https://elite.finviz.com/screener.ashx?v=141&f=geo_usa%2Cta_gap_u10%2Csh_relvol_o2%2Csh_price_o1%2Csh_avgvol_o1000",
+        screener_url="https://elite.finviz.com/screener.ashx?v=141&f=ta_gap_u10%2Csh_relvol_o2%2Csh_price_o1%2Csh_avgvol_o1000",
     ),
     ScanDef(
         scan_id="qulla_breakouts",
         title="Qullamaggie \u2014 Breakouts",
         export_urls=[
-            "https://elite.finviz.com/export.ashx?v=141&f=geo_usa,sh_avgvol_o1000,sh_price_o1,ta_highlow52w_0to25-bhx,ta_perf_30to-4w,tad_0_close::close:d|abvpct::10:|sma:20:sma:d&o=-change&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=sh_avgvol_o1000,sh_price_o1,ta_highlow52w_0to25-bhx,ta_perf_30to-4w,tad_0_close::close:d|abvpct::10:|sma:20:sma:d&o=-change&c=1,47,61,62,63,64,65",
         ],
-        screener_url="https://elite.finviz.com/screener.ashx?v=141&f=geo_usa,sh_avgvol_o1000,sh_price_o1,ta_highlow52w_0to25-bhx,ta_perf_30to-4w,tad_0_close::close:d|abvpct::10:|sma:20:sma:d&ft=3&o=-change",
+        screener_url="https://elite.finviz.com/screener.ashx?v=141&f=sh_avgvol_o1000,sh_price_o1,ta_highlow52w_0to25-bhx,ta_perf_30to-4w,tad_0_close::close:d|abvpct::10:|sma:20:sma:d&ft=3&o=-change",
     ),
     ScanDef(
         scan_id="qulla_parabolic_short",
         title="Qullamaggie \u2014 Parabolic Short",
         export_urls=[
-            "https://elite.finviz.com/export.ashx?v=141&f=cap_largeover,geo_usa,ta_perf_50to-4w&o=-change&c=1,47,61,62,63,64,65",
-            "https://elite.finviz.com/export.ashx?v=141&f=cap_to9,geo_usa,ta_perf_300to-4w,ta_perf2_100to-1w&ft=4&o=-change&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=cap_largeover,ta_perf_50to-4w&o=-change&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=cap_to9,ta_perf_300to-4w,ta_perf2_100to-1w&ft=4&o=-change&c=1,47,61,62,63,64,65",
         ],
-        screener_url="https://elite.finviz.com/screener.ashx?v=141&f=cap_to9,geo_usa,ta_perf_300to-4w,ta_perf2_100to-1w&ft=4&o=-change",
+        screener_url="https://elite.finviz.com/screener.ashx?v=141&f=cap_to9,ta_perf_300to-4w,ta_perf2_100to-1w&ft=4&o=-change",
     ),
     # --- Jeff Sun ---
     ScanDef(
@@ -60,9 +60,9 @@ SCANS: list[ScanDef] = [
         scan_id="jeff_sun_high_adr",
         title="Jeff Sun \u2014 High ADR% Hottest Stock",
         export_urls=[
-            "https://elite.finviz.com/export.ashx?v=141&f=cap_midover,geo_usa,sh_avgvol_500to,sh_curvol_o2000,sh_relvol_o2,ta_volatility_wo10&ft=4&o=-change&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=cap_midover,sh_avgvol_500to,sh_curvol_o2000,sh_relvol_o2,ta_volatility_wo10&ft=4&o=-change&c=1,47,61,62,63,64,65",
         ],
-        screener_url="https://elite.finviz.com/screener.ashx?v=111&f=cap_midover,geo_usa,sh_avgvol_500to,sh_curvol_o2000,sh_relvol_o2,ta_volatility_wo10&ft=4",
+        screener_url="https://elite.finviz.com/screener.ashx?v=111&f=cap_midover,sh_avgvol_500to,sh_curvol_o2000,sh_relvol_o2,ta_volatility_wo10&ft=4",
     ),
     ScanDef(
         scan_id="jeff_sun_extended_bases",
@@ -116,9 +116,9 @@ SCANS: list[ScanDef] = [
         scan_id="jeff_sun_ipo",
         title="Jeff Sun \u2014 IPO",
         export_urls=[
-            "https://elite.finviz.com/export.ashx?v=141&f=cap_midover,fa_epsyoy1_pos,geo_usa,ipodate_prevyear,sh_avgvol_o1000&ft=4&o=industry&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=cap_midover,fa_epsyoy1_pos,ipodate_prevyear,sh_avgvol_o1000&ft=4&o=industry&c=1,47,61,62,63,64,65",
         ],
-        screener_url="https://elite.finviz.com/screener.ashx?v=111&f=cap_midover,fa_epsyoy1_pos,geo_usa,ipodate_prevyear,sh_avgvol_o1000&ft=4&o=industry",
+        screener_url="https://elite.finviz.com/screener.ashx?v=111&f=cap_midover,fa_epsyoy1_pos,ipodate_prevyear,sh_avgvol_o1000&ft=4&o=industry",
     ),
     ScanDef(
         scan_id="jeff_sun_high_short_float",
@@ -150,9 +150,9 @@ SCANS: list[ScanDef] = [
         scan_id="earnings_calendar_week",
         title="Earnings Calendar \u2014 This Week",
         export_urls=[
-            "https://elite.finviz.com/export.ashx?v=141&f=earningsdate_thisweek,geo_usa,sh_avgvol_o1000,sh_price_o1&ft=4&o=-marketcap&c=1,47,61,62,63,64,65",
+            "https://elite.finviz.com/export.ashx?v=141&f=earningsdate_thisweek,sh_avgvol_o1000,sh_price_o1&ft=4&o=-marketcap&c=1,47,61,62,63,64,65",
         ],
-        screener_url="https://elite.finviz.com/screener.ashx?v=111&f=earningsdate_thisweek,geo_usa,sh_avgvol_o1000,sh_price_o1&ft=4&o=-marketcap",
+        screener_url="https://elite.finviz.com/screener.ashx?v=111&f=earningsdate_thisweek,sh_avgvol_o1000,sh_price_o1&ft=4&o=-marketcap",
     ),
 ]
 

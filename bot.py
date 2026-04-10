@@ -611,7 +611,7 @@ def _build_movers_embed(
 ) -> discord.Embed:
     label = "Gainers" if kind == "gainers" else "Losers"
     color = 0x00C853 if kind == "gainers" else 0xFF1744
-    title = f"Top {len(rows)} {label} (USA)"
+    title = f"Top {len(rows)} {label}"
 
     embed = discord.Embed(title=title, color=color, url=screener_url)
 
@@ -640,10 +640,10 @@ def _build_movers_embed(
     return embed
 
 
-@tree.command(name="top_gainers", description="Top 10 gaining stocks today (USA, sorted by change %)")
+@tree.command(name="top_gainers", description="Top 10 gaining stocks today (sorted by change %)")
 @app_commands.describe(
     min_price="Only show stocks at or above this price (optional)",
-    min_volume="Only show stocks with at least this much volume today (optional)",
+    min_volume="Min volume in shares today, e.g. 1000000 for 1M (optional)",
 )
 async def top_gainers_command(
     interaction: discord.Interaction,
@@ -665,10 +665,10 @@ async def top_gainers_command(
     logger.info("top_gainers: %d rows for %s", len(rows), interaction.user)
 
 
-@tree.command(name="top_losers", description="Top 10 losing stocks today (USA, sorted by change %)")
+@tree.command(name="top_losers", description="Top 10 losing stocks today (sorted by change %)")
 @app_commands.describe(
     min_price="Only show stocks at or above this price (optional)",
-    min_volume="Only show stocks with at least this much volume today (optional)",
+    min_volume="Min volume in shares today, e.g. 1000000 for 1M (optional)",
 )
 async def top_losers_command(
     interaction: discord.Interaction,

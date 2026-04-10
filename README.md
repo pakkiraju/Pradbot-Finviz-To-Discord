@@ -26,8 +26,8 @@ Interactive **slash-command** bot: charts, options, news, quotes, group screens,
 | `/news AAPL` | Latest **5** news links |
 | `/quote AAPL` | Chart + OHLCV + change + recent days + headlines |
 | `/scans` | **All scans** or **one** preset (FinViz Elite CSV + same embed style as Elite webhook poster) |
-| `/top_gainers` | Today's **top 10 gaining** USA stocks by change %; optional price/volume filters |
-| `/top_losers` | Today's **top 10 losing** USA stocks by change %; optional price/volume filters |
+| `/top_gainers` | Today's **top 10 gaining** stocks by change %; optional price/volume filters |
+| `/top_losers` | Today's **top 10 losing** stocks by change %; optional price/volume filters |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
 | `/groups Sector` | Sector / industry / country / cap aggregates |
@@ -125,8 +125,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/zerodte <symbol>` | 0DTE analysis |
 | `/news <symbol>` | 5 articles with links |
 | `/quote <symbol>` | Quote panel + chart + news |
-| `/top_gainers [min_price] [min_volume]` | Top 10 gainers today (USA); optional price/volume floor; needs `FINVIZ_API_KEY` |
-| `/top_losers [min_price] [min_volume]` | Top 10 losers today (USA); optional price/volume floor; needs `FINVIZ_API_KEY` |
+| `/top_gainers [min_price] [min_volume]` | Top 10 gainers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
+| `/top_losers [min_price] [min_volume]` | Top 10 losers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk>` | EV grade (A+ … D) + Kelly-based position sizing (ephemeral reply) |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
 | `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
@@ -161,7 +161,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 
 **What `/zerodte` shows:** Call/put OI walls, P/C, total OI, top strikes.
 
-**What `/top_gainers` / `/top_losers` show:** A monospace table of the **top 10** USA stocks by daily change % (gainers sorted highest first, losers most negative first). Columns: ticker, price, change %, volume. Data is pulled from the Elite CSV export using the same column layout as other scans in this repo (`v=141`); the embed **link** opens the **v=152** screener view. Optional **`min_price`** and **`min_volume`** filter before slicing to 10. Requires `FINVIZ_API_KEY`.
+**What `/top_gainers` / `/top_losers` show:** A monospace table of the **top 10** stocks by daily change % (gainers sorted highest first, losers most negative first). Columns: ticker, price, change %, volume. Data is pulled from the Elite CSV export using the same column layout as other scans in this repo (`v=141`); the embed **link** opens the **v=152** screener view. Optional **`min_price`** and **`min_volume`** filter before slicing to 10. **`min_volume`** is in **shares** (e.g. `1000000` for one million); the CSV volume column is treated as **thousands** by default and converted to shares for filtering and display. Override with **`FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares`** in `.env` if your export uses full shares. Requires `FINVIZ_API_KEY`.
 
 **What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Computes reward (R), risk (L), R:L ratio, EV per share, EV/R, full Kelly fraction, and applies **¼ Kelly** (capped at 50% of daily budget) to suggest a dollar risk for the trade and approximate share count. Grades the setup **A+ through D** based on EV/R. Reply is **ephemeral** (only visible to you). No FinViz key needed. Educational tool, not financial advice.
 
