@@ -16,7 +16,7 @@ A persistent Discord bot that responds to commands in real time:
 | `!gex AAPL` | Posts **GEX analysis** for AAPL (nearest expiry) |
 | `!gex SPY 2025-07-18` | GEX for a **specific expiration date** |
 
-Charts are fetched from FinViz Elite as full-size PNG images. GEX analysis pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table — all posted as a Discord embed.
+Charts are fetched from FinViz Elite as full-size PNG images. GEX analysis pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table — all posted as a Discord embed. When no expiry is specified, the bot automatically selects the nearest future expiry (skipping same-day 0DTE since gamma is zero at expiration).
 
 ### Webhook Posters
 
@@ -291,9 +291,9 @@ PradBot-Finviz-To-Discord/
 
 **"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
 
-**"No options data returned"** — The symbol may not have listed options, or the expiry date is invalid. Try without a date (`!gex AAPL`) to use the nearest available expiry.
+**"No options data returned"** — The symbol may not have listed options, or the specific expiry date you entered doesn't exist for that ticker. Try without a date (`!gex AAPL`) to auto-select the nearest future expiry. The bot fetches all available expirations from the Finviz Elite export and picks the closest one after today.
 
-**"Gamma data not available"** — The Finviz options export didn't include gamma values. The bot will show OI-based walls instead. This is a Finviz data limitation, not a bug.
+**"Gamma data not available"** — The Finviz options export didn't include gamma values for the selected expiry (common for 0DTE or very near-term expirations). The bot will show OI-based walls instead. If you want gamma-based GEX, try a further-out expiry (e.g. `!gex AAPL 2025-07-18`).
 
 ## License
 
