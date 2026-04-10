@@ -3,6 +3,10 @@
 Uses the official export/options endpoint documented in the Elite help pages:
   https://elite.finviz.com/export/options?t=SYMBOL&ty=oc&e=YYYY-MM-DD&auth=KEY
 
+When no expiry is specified the &e= param is omitted — Finviz returns ALL
+expirations with an explicit Expiry column.  The code then filters to the
+nearest future expiry automatically.
+
 Mirrors the retry and auth patterns from fetch_elite.py.
 """
 
@@ -13,11 +17,10 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +37,28 @@ _HEADERS = {
 
 # Tolerant column name mapping — keys are lowercased/stripped header names,
 # values are the canonical field names used in OptionsRow.
+#
+# Actual Finviz Elite CSV headers (confirmed April 2026):
+#   Without &e=:  Contract Name, Last Trade, Expiry, Strike, Last Close, …
+#   With &e=:     Contract Name, Last Trade, Strike, Last Close, …
+#                 (no Expiry column when a specific date is requested)
 _COLUMN_MAP = {
     "strike": "strike",
     "strike price": "strike",
+    "contract name": "contract_name",
     "type": "opt_type",
     "option type": "opt_type",
     "call/put": "opt_type",
     "c/p": "opt_type",
     "last": "last",
     "last price": "last",
+    "last close": "last",
     "bid": "bid",
     "ask": "ask",
     "volume": "volume",
     "vol": "volume",
     "open interest": "oi",
+    "open int.": "oi",
     "open int": "oi",
     "oi": "oi",
     "openint": "oi",
@@ -64,6 +75,12 @@ _COLUMN_MAP = {
     "expiration date": "expiry",
     "exp date": "expiry",
 }
+
+# OCC-style contract name encodes the expiry date, e.g. MSFT260718C00400000
+# means expiry 2026-07-18, Call, strike $400.
+_CONTRACT_RE = re.compile(
+    r"^[A-Z0-9.]+(\d{2})(\d{2})(\d{2})([CP])\d+$"
+)
 
 
 @dataclass
@@ -131,16 +148,11 @@ def _normalise_type(raw: str) -> str:
     return r
 
 
-def build_options_url(symbol: str, expiry: str | None = None) -> str:
+def _build_options_url(symbol: str, expiry: str | None = None) -> str:
     """Build the Finviz Elite options export URL.
 
-    Parameters
-    ----------
-    symbol : str
-        Ticker (already uppercased/validated).
-    expiry : str or None
-        Expiration date YYYY-MM-DD. If None, omit the &e= param so Finviz
-        returns the default (nearest) expiry.
+    When *expiry* is None the ``&e=`` param is omitted and Finviz returns all
+    expirations (with an Expiry column in the CSV).
     """
     base = "https://elite.finviz.com/export/options"
     url = f"{base}?t={symbol}&ty=oc"
@@ -152,76 +164,9 @@ def build_options_url(symbol: str, expiry: str | None = None) -> str:
     return url
 
 
-def scrape_expiry_dates(symbol: str) -> list[str]:
-    """Scrape the list of available expiration dates from the Finviz quote page.
-
-    Returns dates as YYYY-MM-DD strings, sorted ascending. Falls back to an
-    empty list on failure (caller should handle gracefully).
-    """
-    api_key = _get_api_key()
-    url = f"https://elite.finviz.com/quote.ashx?t={symbol}&ty=oc"
-    if api_key:
-        url += f"&auth={api_key}"
-
-    try:
-        resp = requests.get(url, headers=_HEADERS, timeout=20)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning("[options:%s] failed to scrape expiry list: %s", symbol, e)
-        return []
-
-    # Finviz puts expiry dates in <select> or links with date values
-    soup = BeautifulSoup(resp.text, "html.parser")
-    dates: list[str] = []
-    date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-    for option in soup.find_all("option"):
-        val = option.get("value", "")
-        m = date_re.search(val)
-        if m:
-            dates.append(m.group())
-    for a in soup.find_all("a", href=True):
-        m = date_re.search(a["href"])
-        if m and "ty=oc" in a["href"]:
-            d = m.group()
-            if d not in dates:
-                dates.append(d)
-
-    dates.sort()
-    return dates
-
-
-def nearest_expiry(symbol: str) -> str | None:
-    """Return the nearest future expiry for the symbol, or None."""
-    dates = scrape_expiry_dates(symbol)
-    today = date.today().isoformat()
-    for d in dates:
-        if d >= today:
-            return d
-    return dates[0] if dates else None
-
-
-def fetch_options(symbol: str, expiry: str | None = None) -> list[OptionsRow]:
-    """Download and parse the options-chain CSV from FinViz Elite.
-
-    If *expiry* is None, the nearest available expiry is discovered
-    automatically.  Returns an empty list on any failure.
-    """
-    api_key = _get_api_key()
-    if not api_key:
-        logger.error(
-            "FINVIZ_API_KEY not set. Create a .env file in %s with:\n"
-            "  FINVIZ_API_KEY=your_key_here",
-            Path(__file__).resolve().parent,
-        )
-        return []
-
-    if expiry is None:
-        expiry = nearest_expiry(symbol)
-        if not expiry:
-            logger.warning("[options:%s] could not determine nearest expiry", symbol)
-
-    url = build_options_url(symbol, expiry)
+def _fetch_csv(symbol: str, url: str) -> str | None:
+    """GET the export URL with retries.  Returns raw CSV text or None."""
+    logger.info("[options:%s] fetching %s", symbol, url.split("&auth=")[0])
 
     for attempt in range(_MAX_RETRIES):
         try:
@@ -240,17 +185,79 @@ def fetch_options(symbol: str, expiry: str | None = None) -> list[OptionsRow]:
             continue
     else:
         logger.error("[options:%s] failed after %d retries", symbol, _MAX_RETRIES)
-        return []
+        return None
 
     text = resp.text.strip().lstrip("\ufeff")
+
+    if not text:
+        logger.warning("[options:%s] empty response from FinViz", symbol)
+        return None
+
     if text.startswith("<"):
         if "login" in text[:2000].lower() or "sign in" in text[:2000].lower():
             logger.error("[options:%s] FinViz returned login page — check FINVIZ_API_KEY", symbol)
         else:
-            logger.warning("[options:%s] got HTML instead of CSV", symbol)
+            logger.warning("[options:%s] got HTML instead of CSV (first 200 chars: %s)", symbol, text[:200])
+        return None
+
+    return text
+
+
+def fetch_options(symbol: str, expiry: str | None = None) -> list[OptionsRow]:
+    """Download and parse the options-chain CSV from FinViz Elite.
+
+    When *expiry* is None the endpoint is called without ``&e=``, which returns
+    every expiration.  The rows are then filtered to the nearest future expiry.
+    """
+    api_key = _get_api_key()
+    if not api_key:
+        logger.error(
+            "FINVIZ_API_KEY not set. Create a .env file in %s with:\n"
+            "  FINVIZ_API_KEY=your_key_here",
+            Path(__file__).resolve().parent,
+        )
         return []
 
-    return _parse_csv(text, symbol, expiry or "")
+    url = _build_options_url(symbol, expiry)
+    text = _fetch_csv(symbol, url)
+    if text is None:
+        return []
+
+    all_rows = _parse_csv(text, symbol, expiry or "")
+
+    if expiry is not None:
+        return all_rows
+
+    # No expiry requested — pick the nearest future expiry from the data.
+    # Prefer the first expiry *after* today because 0DTE gamma is always zero,
+    # making GEX analysis meaningless.  Fall back to today if nothing later.
+    today = date.today().isoformat()
+    expiries = sorted({r.expiry for r in all_rows if r.expiry})
+    if not expiries:
+        logger.warning("[options:%s] CSV parsed but no expiry info found in rows", symbol)
+        return all_rows
+
+    nearest = next((d for d in expiries if d > today), None)
+    if nearest is None:
+        nearest = next((d for d in expiries if d >= today), expiries[-1])
+    logger.info(
+        "[options:%s] %d total expiries found, auto-selected nearest: %s",
+        symbol, len(expiries), nearest,
+    )
+    filtered = [r for r in all_rows if r.expiry == nearest]
+    logger.info("[options:%s] filtered to %d rows for expiry %s", symbol, len(filtered), nearest)
+    return filtered
+
+
+def _normalise_date(raw: str) -> str:
+    """Convert M/D/YYYY or similar to YYYY-MM-DD.  Pass through if already ISO."""
+    raw = raw.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        return raw
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+    if m:
+        return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return raw
 
 
 def _parse_csv(text: str, symbol: str, fallback_expiry: str) -> list[OptionsRow]:
@@ -265,15 +272,14 @@ def _parse_csv(text: str, symbol: str, fallback_expiry: str) -> list[OptionsRow]
         logger.warning("[options:%s] CSV has no headers", symbol)
         return []
 
-    # Build mapping: CSV header -> canonical name
     col_map: dict[str, str] = {}
     for raw_header in reader.fieldnames:
         key = raw_header.strip().lower()
         if key in _COLUMN_MAP:
             col_map[raw_header] = _COLUMN_MAP[key]
 
-    logger.debug("[options:%s] CSV headers: %s", symbol, reader.fieldnames)
-    logger.debug("[options:%s] mapped columns: %s", symbol, col_map)
+    logger.info("[options:%s] CSV headers: %s", symbol, list(reader.fieldnames))
+    logger.info("[options:%s] mapped columns: %s", symbol, {v: k for k, v in col_map.items()})
 
     rows: list[OptionsRow] = []
     for raw in reader:
@@ -289,6 +295,17 @@ def _parse_csv(text: str, symbol: str, fallback_expiry: str) -> list[OptionsRow]
         if opt_type not in ("call", "put"):
             continue
 
+        # Expiry: prefer explicit column, then contract name, then fallback
+        row_expiry = mapped.get("expiry") or ""
+        if row_expiry:
+            row_expiry = _normalise_date(row_expiry)
+        if not row_expiry:
+            contract = mapped.get("contract_name", "").strip().strip('"')
+            m = _CONTRACT_RE.match(contract)
+            if m:
+                yy, mm, dd = m.group(1), m.group(2), m.group(3)
+                row_expiry = f"20{yy}-{mm}-{dd}"
+
         rows.append(OptionsRow(
             strike=strike,
             opt_type=opt_type,
@@ -302,7 +319,9 @@ def _parse_csv(text: str, symbol: str, fallback_expiry: str) -> list[OptionsRow]
             gamma=_parse_float(mapped.get("gamma")),
             theta=_parse_float(mapped.get("theta")),
             vega=_parse_float(mapped.get("vega")),
-            expiry=mapped.get("expiry") or fallback_expiry,
+            expiry=row_expiry or fallback_expiry,
         ))
 
+    has_gamma = any(r.gamma is not None and r.gamma != 0.0 for r in rows)
+    logger.info("[options:%s] parsed %d rows, gamma data: %s", symbol, len(rows), "yes" if has_gamma else "no")
     return rows
