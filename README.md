@@ -17,8 +17,9 @@ A persistent Discord bot that responds to commands in real time:
 | `!gex SPY 2025-07-18` | GEX for a **specific expiration date** |
 | `!0dte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
 | `!news AAPL` | Latest **5 news articles** with clickable links |
+| `!AAPL` | **Quick quote panel** — chart, OHLCV, change, recent days, and top 3 headlines |
 
-Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `!news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources.
+Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead). `!news` fetches the latest headlines from the FinViz Elite news export and posts them as clickable links with dates and sources. `!SYMBOL` (any valid ticker on its own) posts a combined quote panel with the daily chart, OHLCV data, daily change, a 5-day history table, and the 3 latest news headlines — all in one embed.
 
 ### Webhook Posters
 
@@ -187,6 +188,7 @@ The bot connects to Discord and stays running, listening for commands in any tex
 | `!news <SYMBOL>` | Latest 5 news articles with clickable links, dates, and sources |
 | `!purge <number>` | Delete the last N messages in the channel (requires Manage Messages) |
 | `!purge all` | Delete **all** messages in the channel (asks for confirmation) |
+| `!<SYMBOL>` | Quick quote panel: chart + OHLCV + change + 5-day history + 3 latest headlines |
 
 **Examples:**
 
@@ -203,9 +205,12 @@ The bot connects to Discord and stays running, listening for commands in any tex
 !news TSLA
 !purge 10
 !purge all
+!MSFT
+!AAPL
+!TSLA
 ```
 
-The bot replies with an embedded image (charts) or an embed with analysis fields (options). If the symbol is invalid or data can't be fetched, it replies with an error message.
+The bot replies with an embedded image (charts) or an embed with analysis fields (options). Typing just `!SYMBOL` (e.g. `!MSFT`) posts a combined quote panel with chart, price data, and news in one message. If the symbol is invalid or data can't be fetched, it replies with an error message.
 
 **What `!gex` shows:**
 - **Net GEX** — total dealer gamma exposure across all strikes.
@@ -230,6 +235,15 @@ Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather tha
 - The **5 most recent** news articles related to the ticker.
 - Each article is a **clickable link** that opens directly in your browser.
 - **Date** and **source** (e.g. Reuters, Bloomberg) are shown for each article.
+
+**What `!SYMBOL` shows (quick quote panel):**
+- **Daily chart** — full-size candlestick chart from FinViz Elite.
+- **Last close** with daily change (dollar and percent) in the title.
+- **OHLCV** — open, high, low, volume for the latest bar.
+- **Recent Days** — 5-day OHLCV history table.
+- **Latest News** — 3 most recent headlines as clickable links.
+
+This is a shortcut that combines `!chart`, price data, and `!news` into a single response. Any valid ticker works (e.g. `!MSFT`, `!AAPL`, `!BRK.B`). Reserved command names like `chart`, `gex`, `news`, `purge`, etc. are not treated as tickers.
 
 ### Options (webhook scripts)
 
@@ -285,10 +299,11 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, !news)
+  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, !news, !SYMBOL)
   finviz_chart.py        # Fetches chart images from FinViz Elite
   finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
   finviz_news.py         # Fetches news articles from FinViz Elite news export
+  finviz_quote.py        # Fetches OHLCV quote history from FinViz Elite quote export
   gex_compute.py         # Computes GEX metrics (walls, gamma flip, net GEX)
   post_scans_elite.py    # Webhook poster — Elite version
   post_scans_free.py     # Webhook poster — Free version

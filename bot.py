@@ -19,6 +19,7 @@ from discord.ext import commands
 from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
 from finviz_news import fetch_news
 from finviz_options import fetch_options
+from finviz_quote import fetch_quote
 from gex_compute import compute_gex
 
 # ---------------------------------------------------------------------------
@@ -62,9 +63,32 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+_TICKER_RE = re.compile(r"^!([A-Za-z][A-Za-z0-9.]{0,9})$")
+
+
 @bot.event
 async def on_ready():
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    text = message.content.strip()
+    m = _TICKER_RE.match(text)
+
+    if m:
+        token = m.group(1).lower()
+        # Let registered commands through normally
+        if token not in {cmd.name for cmd in bot.commands}:
+            ticker = validate_symbol(m.group(1))
+            if ticker:
+                await _handle_ticker_quote(message, ticker)
+                return
+
+    await bot.process_commands(message)
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +473,89 @@ async def purge_error(ctx: commands.Context, error: commands.CommandError):
     else:
         logger.exception("Unhandled error in !purge: %s", error)
         await ctx.reply("Something went wrong. Please try again later.")
+
+
+# ---------------------------------------------------------------------------
+# Dynamic !SYMBOL quote panel
+# ---------------------------------------------------------------------------
+
+def _fmt_vol(v: int) -> str:
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:,.2f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:,.1f}K"
+    return f"{v:,}"
+
+
+async def _handle_ticker_quote(message: discord.Message, ticker: str):
+    """Compose and send a quote panel: chart + OHLCV + latest news."""
+    channel = message.channel
+
+    async with channel.typing():
+        bars, chart_data, articles = await asyncio.gather(
+            asyncio.to_thread(fetch_quote, ticker, 5),
+            asyncio.to_thread(fetch_chart, ticker, "d"),
+            asyncio.to_thread(fetch_news, ticker, 3),
+        )
+
+    if not bars:
+        await message.reply(f"No quote data found for **{ticker}**.")
+        return
+
+    latest = bars[0]
+    prev_close = bars[1].close if len(bars) > 1 else None
+
+    # Calculate change from previous close
+    if prev_close and prev_close != 0:
+        chg = latest.close - prev_close
+        chg_pct = (chg / prev_close) * 100
+        sign = "+" if chg >= 0 else ""
+        change_str = f"{sign}{chg:,.2f} ({sign}{chg_pct:.2f}%)"
+    else:
+        change_str = "N/A"
+
+    embed = discord.Embed(
+        title=f"{ticker} — ${latest.close:,.2f}  {change_str}",
+        color=0x1ABC9C,
+        url=f"https://finviz.com/quote.ashx?t={ticker}",
+    )
+    embed.add_field(name="Open", value=f"${latest.open:,.2f}", inline=True)
+    embed.add_field(name="High", value=f"${latest.high:,.2f}", inline=True)
+    embed.add_field(name="Low", value=f"${latest.low:,.2f}", inline=True)
+    embed.add_field(name="Volume", value=_fmt_vol(latest.volume), inline=True)
+    embed.add_field(name="Date", value=latest.date, inline=True)
+
+    # Recent days table
+    if len(bars) > 1:
+        lines = ["Date       |  Close   |  Volume"]
+        lines.append("-" * len(lines[0]))
+        for b in bars:
+            lines.append(f"{b.date} | ${b.close:>8,.2f} | {_fmt_vol(b.volume):>8}")
+        table = "\n".join(lines)
+        if len(table) <= 1000:
+            embed.add_field(name="Recent Days", value=f"```\n{table}\n```", inline=False)
+
+    # Latest news (3 headlines)
+    if articles:
+        news_lines = []
+        for a in articles:
+            src = f" — {a.source}" if a.source else ""
+            news_lines.append(f"[{a.title}]({a.url}){src}")
+        embed.add_field(name="Latest News", value="\n".join(news_lines), inline=False)
+
+    # Attach chart image
+    file = None
+    if chart_data:
+        filename = f"{ticker}_daily.png"
+        file = discord.File(io.BytesIO(chart_data), filename=filename)
+        embed.set_image(url=f"attachment://{filename}")
+
+    embed.set_footer(text="Data from FinViz Elite")
+
+    if file:
+        await message.reply(embed=embed, file=file)
+    else:
+        await message.reply(embed=embed)
 
 
 # ---------------------------------------------------------------------------
