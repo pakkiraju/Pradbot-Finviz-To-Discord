@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 import discord
@@ -265,6 +266,58 @@ async def gex_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.reply("Usage: `!gex <SYMBOL> [YYYY-MM-DD]`\nExample: `!gex AAPL`")
     else:
         logger.exception("Unhandled error in !gex: %s", error)
+        await ctx.reply("Something went wrong. Please try again later.")
+
+
+# ---------------------------------------------------------------------------
+# !0dte command
+# ---------------------------------------------------------------------------
+
+@bot.command(name="0dte")
+async def zero_dte_command(ctx: commands.Context, symbol: str | None = None):
+    """Post 0DTE options analysis (OI walls, volume, P/C ratio) for a ticker.
+
+    Usage:
+        !0dte AAPL
+    """
+    if symbol is None:
+        await ctx.reply("Usage: `!0dte <SYMBOL>`\nExample: `!0dte AAPL`")
+        return
+
+    ticker = validate_symbol(symbol)
+    if ticker is None:
+        await ctx.reply(f"`{symbol}` doesn't look like a valid ticker symbol.")
+        return
+
+    today = date.today().isoformat()
+
+    async with ctx.typing():
+        rows = await asyncio.to_thread(fetch_options, ticker, today)
+
+    if not rows:
+        await ctx.reply(
+            f"No 0DTE options data for **{ticker}** today ({today}). "
+            "The symbol may not have options expiring today."
+        )
+        return
+
+    summary = compute_gex(ticker, today, rows)
+    if summary is None:
+        await ctx.reply(f"Could not compute 0DTE analysis for **{ticker}**. No valid strike data found.")
+        return
+
+    embed = _build_gex_embed(summary)
+    embed.title = f"{ticker} — 0DTE Analysis"
+    embed.color = 0xE67E22
+    await ctx.reply(embed=embed)
+
+
+@zero_dte_command.error
+async def zero_dte_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.reply("Usage: `!0dte <SYMBOL>`\nExample: `!0dte AAPL`")
+    else:
+        logger.exception("Unhandled error in !0dte: %s", error)
         await ctx.reply("Something went wrong. Please try again later.")
 
 

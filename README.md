@@ -13,10 +13,11 @@ A persistent Discord bot that responds to commands in real time:
 | `!chart AAPL` | Posts a **daily** FinViz candlestick chart for AAPL |
 | `!chart MSFT w` | Posts a **weekly** chart (`d` = daily, `w` = weekly, `m` = monthly) |
 | `!chart TSLA m` | Posts a **monthly** chart |
-| `!gex AAPL` | Posts **GEX analysis** for AAPL (nearest expiry) |
+| `!gex AAPL` | Posts **GEX analysis** for AAPL (nearest future expiry with gamma data) |
 | `!gex SPY 2025-07-18` | GEX for a **specific expiration date** |
+| `!0dte AAPL` | **0DTE analysis** for today's expiry (OI walls, volume, P/C ratio) |
 
-Charts are fetched from FinViz Elite as full-size PNG images. GEX analysis pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table — all posted as a Discord embed. When no expiry is specified, the bot automatically selects the nearest future expiry (skipping same-day 0DTE since gamma is zero at expiration).
+Charts are fetched from FinViz Elite as full-size PNG images. `!gex` pulls the full options chain CSV from FinViz Elite, computes dealer gamma exposure per strike, and shows call walls, put walls, gamma flip point, put/call ratio, and a top-strikes table. `!0dte` targets today's expiry specifically for same-day OI-based analysis (gamma is zero at expiration, so OI walls, volume, and P/C ratio are shown instead).
 
 ### Webhook Posters
 
@@ -105,7 +106,7 @@ The free version does not need a `.env` file.
 
 ### 5. Create a Discord bot application and get the token
 
-Follow these steps to create the bot that will respond to `!chart` and `!gex` commands.
+Follow these steps to create the bot that will respond to `!chart`, `!gex`, and `!0dte` commands.
 
 #### 5a. Create the application
 
@@ -179,8 +180,9 @@ The bot connects to Discord and stays running, listening for commands in any tex
 | `!chart <SYMBOL> d` | Daily chart (same as above — `d` is the default) |
 | `!chart <SYMBOL> w` | Weekly chart |
 | `!chart <SYMBOL> m` | Monthly chart |
-| `!gex <SYMBOL>` | GEX / options analysis for nearest expiry |
+| `!gex <SYMBOL>` | GEX / options analysis for nearest future expiry |
 | `!gex <SYMBOL> <YYYY-MM-DD>` | GEX for a specific expiration date |
+| `!0dte <SYMBOL>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
 
 **Examples:**
 
@@ -191,9 +193,11 @@ The bot connects to Discord and stays running, listening for commands in any tex
 !chart BRK.B
 !gex AAPL
 !gex SPY 2025-07-18
+!0dte AAPL
+!0dte SPY
 ```
 
-The bot replies with an embedded image (charts) or an embed with GEX fields (options analysis). If the symbol is invalid or data can't be fetched, it replies with an error message.
+The bot replies with an embedded image (charts) or an embed with analysis fields (options). If the symbol is invalid or data can't be fetched, it replies with an error message.
 
 **What `!gex` shows:**
 - **Net GEX** — total dealer gamma exposure across all strikes.
@@ -204,6 +208,15 @@ The bot replies with an embedded image (charts) or an embed with GEX fields (opt
 - **Top Strikes** — table of the most significant strikes by GEX magnitude.
 
 If gamma data is not available in the Finviz export, the bot falls back to **OI-based walls** and labels them accordingly.
+
+**What `!0dte` shows:**
+- **Call OI Wall** — strike with the highest call open interest (resistance).
+- **Put OI Wall** — strike with the highest put open interest (support).
+- **P/C Ratio** — put-to-call open interest ratio.
+- **Total OI** — total call and put open interest.
+- **Top Strikes** — table of the most significant strikes by open interest.
+
+Since gamma is always zero at expiration, 0DTE uses OI-based analysis rather than GEX.
 
 ### Options (webhook scripts)
 
@@ -259,7 +272,7 @@ The scripts run once and exit. To post daily, set up a scheduler:
 
 ```
 PradBot-Finviz-To-Discord/
-  bot.py                 # Discord bot entry point (!chart, !gex, and future commands)
+  bot.py                 # Discord bot entry point (!chart, !gex, !0dte, and future commands)
   finviz_chart.py        # Fetches chart images from FinViz Elite
   finviz_options.py      # Fetches options-chain CSV from FinViz Elite export
   gex_compute.py         # Computes GEX metrics (walls, gamma flip, net GEX)
@@ -292,6 +305,8 @@ PradBot-Finviz-To-Discord/
 **"Could not fetch chart"** — The bot received a non-image response from FinViz. Verify your `FINVIZ_API_KEY` is valid and that your Elite subscription is active.
 
 **"No options data returned"** — The symbol may not have listed options, or the specific expiry date you entered doesn't exist for that ticker. Try without a date (`!gex AAPL`) to auto-select the nearest future expiry. The bot fetches all available expirations from the Finviz Elite export and picks the closest one after today.
+
+**"No 0DTE options data"** — The symbol doesn't have options expiring today. Not every ticker has daily expirations — most only have weekly or monthly. Try `!gex SYMBOL` instead to see the nearest available expiry.
 
 **"Gamma data not available"** — The Finviz options export didn't include gamma values for the selected expiry (common for 0DTE or very near-term expirations). The bot will show OI-based walls instead. If you want gamma-based GEX, try a further-out expiry (e.g. `!gex AAPL 2025-07-18`).
 
