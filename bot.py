@@ -378,6 +378,80 @@ async def news_error(ctx: commands.Context, error: commands.CommandError):
 
 
 # ---------------------------------------------------------------------------
+# !purge command
+# ---------------------------------------------------------------------------
+
+@bot.command(name="purge")
+@commands.has_permissions(manage_messages=True)
+@commands.bot_has_permissions(manage_messages=True, read_message_history=True)
+async def purge_command(ctx: commands.Context, amount: str | None = None):
+    """Delete messages from the current channel.
+
+    Usage:
+        !purge 10       — delete the last 10 messages
+        !purge all       — delete ALL messages in the channel
+    """
+    if amount is None:
+        await ctx.reply("Usage: `!purge <number|all>`\nExample: `!purge 10` or `!purge all`")
+        return
+
+    if amount.lower() == "all":
+        confirm_msg = await ctx.reply(
+            "Are you sure you want to delete **all** messages in this channel? "
+            "Reply `yes` within 15 seconds to confirm."
+        )
+        try:
+            reply = await bot.wait_for(
+                "message",
+                check=lambda m: (
+                    m.author == ctx.author
+                    and m.channel == ctx.channel
+                    and m.content.strip().lower() in ("yes", "y")
+                ),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            await confirm_msg.edit(content="Purge cancelled (timed out).")
+            return
+
+        deleted = await ctx.channel.purge(limit=None)
+        info = await ctx.channel.send(f"Purged **{len(deleted)}** messages.")
+        await info.delete(delay=5)
+        logger.info("purge all: %d messages deleted in #%s by %s", len(deleted), ctx.channel.name, ctx.author)
+        return
+
+    try:
+        count = int(amount)
+    except ValueError:
+        await ctx.reply("Please provide a number or `all`.\nExample: `!purge 25` or `!purge all`")
+        return
+
+    if count < 1:
+        await ctx.reply("Amount must be at least 1.")
+        return
+    if count > 500:
+        await ctx.reply("Maximum purge is 500 messages at a time. Use `!purge all` to clear the channel.")
+        return
+
+    # +1 to include the !purge command message itself
+    deleted = await ctx.channel.purge(limit=count + 1)
+    info = await ctx.channel.send(f"Purged **{len(deleted) - 1}** messages.")
+    await info.delete(delay=5)
+    logger.info("purge %d: %d messages deleted in #%s by %s", count, len(deleted) - 1, ctx.channel.name, ctx.author)
+
+
+@purge_command.error
+async def purge_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.reply("You need the **Manage Messages** permission to use `!purge`.")
+    elif isinstance(error, commands.BotMissingPermissions):
+        await ctx.reply("I need **Manage Messages** and **Read Message History** permissions to purge.")
+    else:
+        logger.exception("Unhandled error in !purge: %s", error)
+        await ctx.reply("Something went wrong. Please try again later.")
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

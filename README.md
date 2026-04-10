@@ -185,6 +185,8 @@ The bot connects to Discord and stays running, listening for commands in any tex
 | `!gex <SYMBOL> <YYYY-MM-DD>` | GEX for a specific expiration date |
 | `!0dte <SYMBOL>` | 0DTE analysis for today's expiry (OI walls, volume, P/C ratio) |
 | `!news <SYMBOL>` | Latest 5 news articles with clickable links, dates, and sources |
+| `!purge <number>` | Delete the last N messages in the channel (requires Manage Messages) |
+| `!purge all` | Delete **all** messages in the channel (asks for confirmation) |
 
 **Examples:**
 
@@ -199,6 +201,8 @@ The bot connects to Discord and stays running, listening for commands in any tex
 !0dte SPY
 !news AAPL
 !news TSLA
+!purge 10
+!purge all
 ```
 
 The bot replies with an embedded image (charts) or an embed with analysis fields (options). If the symbol is invalid or data can't be fetched, it replies with an error message.
