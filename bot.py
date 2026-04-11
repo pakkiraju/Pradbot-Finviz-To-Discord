@@ -6,7 +6,7 @@ Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
 Optional GUILD_ID: if set, slash commands sync to that server only (instant).
 If unset, commands sync globally (can take up to ~1 hour to appear everywhere).
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py).
 """
 
 import asyncio
@@ -31,6 +31,8 @@ from finviz_options import fetch_options
 from finviz_quote import fetch_quote
 from gex_compute import compute_gex
 from ev_position_sizing import compute as ev_compute, SizingError, EVResult
+from fetch_v152_universe import FINVIZ_V152_SCREENER_URL
+from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
 # ---------------------------------------------------------------------------
@@ -688,6 +690,78 @@ async def top_losers_command(
     embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
+
+
+_HEATMAP_UNIVERSE_CHOICES = [
+    app_commands.Choice(name="S&P 500 (default)", value="sp500"),
+    app_commands.Choice(name="NASDAQ 100", value="ndx100"),
+    app_commands.Choice(name="Dow Jones", value="dow"),
+    app_commands.Choice(name="Russell 2000", value="russell2000"),
+]
+
+async def _run_heatmap_command(
+    interaction: discord.Interaction,
+    *,
+    universe: str,
+):
+    """FinViz-style nested treemap (v=152 export; slow)."""
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/heatmap`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    try:
+        images, as_of = await asyncio.to_thread(
+            build_daily_heatmaps,
+            universe=universe,
+        )
+    except Exception as e:
+        logger.exception("heatmap failed for %s", interaction.user)
+        await interaction.followup.send(f"Heatmap build failed: `{e}`")
+        return
+
+    if not images or as_of is None:
+        msg = (
+            "Could not build a treemap — the CSV export may have failed (check **FINVIZ_API_KEY** and "
+            "`FINVIZ_V152_EXPORT_TIMEOUT_SEC`), or **too few tickers** matched the selected index universe."
+        )
+        await interaction.followup.send(msg)
+        return
+
+    files = [discord.File(io.BytesIO(png), filename=name) for name, png in images]
+    filt = f"universe=`{universe}`"
+    embed = discord.Embed(
+        title="Daily performance treemap",
+        description=(
+            f"**Size** = market cap · **Color** = change % (delayed). "
+            f"**{as_of.isoformat()}**. {filt}\n"
+            f"[Open Finviz screener]({FINVIZ_V152_SCREENER_URL})"
+        ),
+        color=0x06B6D4,
+    )
+    embed.set_footer(text="Pradly Portal • FinViz Elite • nested squarify layout")
+    await interaction.followup.send(embed=embed, files=files)
+    logger.info("heatmap: %d file(s) for %s", len(files), interaction.user)
+
+
+@tree.command(
+    name="heatmap",
+    description="FinViz-style market treemap by index (S&P 500 default). Size=cap, color=change %. Slow.",
+)
+@app_commands.choices(universe=_HEATMAP_UNIVERSE_CHOICES)
+@app_commands.describe(
+    universe="Benchmark / index (default S&P 500; includes stocks and ETFs in that index)",
+)
+async def heatmap_command(
+    interaction: discord.Interaction,
+    universe: str = "sp500",
+):
+    await _run_heatmap_command(
+        interaction,
+        universe=universe,
+    )
 
 
 # ---------------------------------------------------------------------------

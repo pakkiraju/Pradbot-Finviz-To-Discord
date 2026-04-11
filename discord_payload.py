@@ -10,6 +10,7 @@ This module chunks rows into multiple messages when the table overflows the
 description limit, and handles rate-limit (429) responses with retry.
 """
 
+import json
 import logging
 import re
 import time
@@ -213,3 +214,64 @@ def post_to_webhook(webhook_url: str, embeds: list[dict]) -> bool:
             time.sleep(0.5)
 
     return True
+
+
+def post_files_to_webhook(
+    webhook_url: str,
+    files: list[tuple[str, bytes]],
+    *,
+    embed: dict | None = None,
+    content: str | None = None,
+) -> bool:
+    """POST PNG (or other) attachments to a Discord webhook in one message.
+
+    *files* is a list of ``(filename, raw_bytes)``. Discord allows up to 10 files.
+    Optional *embed* and *content* go in ``payload_json``.
+    """
+    if not files:
+        logger.error("post_files_to_webhook: no files")
+        return False
+    if len(files) > 10:
+        logger.warning("Truncating to 10 files (Discord limit)")
+        files = files[:10]
+
+    payload: dict = {}
+    if content:
+        payload["content"] = content
+    if embed:
+        payload["embeds"] = [embed]
+
+    data = {}
+    if payload:
+        data["payload_json"] = json.dumps(payload)
+
+    multipart: list[tuple[str, tuple[str, bytes, str]]] = []
+    for i, (fname, raw) in enumerate(files):
+        multipart.append((f"files[{i}]", (fname, raw, "image/png")))
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = requests.post(webhook_url, data=data, files=multipart, timeout=60)
+            if resp.ok:
+                return True
+            if resp.status_code == 429:
+                retry_after = resp.json().get("retry_after", 5)
+                logger.warning("Discord 429 on file upload, retry after %.1fs", retry_after)
+                time.sleep(retry_after + 0.5)
+                continue
+            try:
+                body = resp.json()
+            except Exception:
+                body = resp.text[:500]
+            logger.error("Discord file POST %d: %s", resp.status_code, body)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)
+                continue
+            return False
+        except requests.RequestException as e:
+            logger.error("Webhook file POST failed (attempt %d): %s", attempt + 1, e)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)
+            else:
+                return False
+    return False

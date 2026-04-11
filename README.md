@@ -1,11 +1,12 @@
 # PradBot-Finviz-To-Discord
 
-This repository ships **two separate products** that live in the same folder and share some library code. You can use **either one**, or **both**; they do not depend on each other at runtime.
+This repository ships **three** standalone products that live in the same folder and share library code. Use any combination; they do not depend on each other at runtime.
 
 | Product | What it is | How it talks to Discord |
 |--------|------------|-------------------------|
 | **PradBot** | Long-running Discord **application** (`bot.py`) | Bot user + slash commands in channels |
 | **Scan webhook posters** | One-shot **CLI scripts** (`post_scans_elite.py` / `post_scans_free.py`) | Incoming webhooks per channel (URLs in `webhooks.json`) |
+| **Daily heatmaps poster** | **`post_heatmaps_elite.py`** — v=152 full-universe CSV, nested sector/industry/stock treemap | One incoming webhook (`heatmaps` key or `HEATMAP_WEBHOOK_URL`), PNG attachments |
 
 **Shared code (not a third product):** The Elite webhook script and PradBot’s **`/scans`** command both use the same pipeline: **`fetch_elite.fetch_scan`** / **`fetch_scan_with_screener`** (for the correct FinViz link, including Top Gainers/Losers), **`scan_registry`**, and **`discord_payload.build_embeds`**. PradBot does **not** execute `post_scans_elite.py`; it calls the same Python functions directly so tables match the Elite poster.
 
@@ -263,6 +264,20 @@ Scripts exit after one run. Use Task Scheduler, cron, etc.:
 
 ---
 
+## Product 3 — Daily heatmaps (`post_heatmaps_elite.py`)
+
+**Elite only.** Downloads the same **full v=152** custom export (all columns, full symbol universe in one `export.ashx` request — large CSV, **~2–3 minute** HTTP timeout by default). Builds a **nested treemap** (sector → industry → stocks; size = market cap, color = change %) and posts **one** PNG per run via webhook multipart upload. The same pipeline powers PradBot **`/heatmap`**.
+
+- **PradBot `/heatmap`:** choose **universe** only — **S&P 500** (default), **NASDAQ 100**, **Dow**, or **Russell 2000** (FinViz Index column; includes both stocks and ETFs in that benchmark). Options for market-cap tier, asset class (stocks vs ETFs), and sector/theme substring were **removed** to keep the command simple.
+- **Requirements:** `FINVIZ_API_KEY`, `pip install -r requirements.txt` (adds **pandas**, **matplotlib**). Optional: `FINVIZ_V152_EXPORT_TIMEOUT_SEC` (default **180**).
+- **Webhook:** Add **`"heatmaps": "https://discord.com/api/webhooks/..."`** to **`webhooks.json`**, or set **`HEATMAP_WEBHOOK_URL`** in `.env` (overrides JSON).
+- **Run:** `python post_heatmaps_elite.py` — use **`--dry-run`** to fetch and build images without posting.
+- **Scheduling:** Run once per day after the cash session (FinViz quotes are delayed ~15 minutes). One run = one heavy FinViz pull; avoid overlapping cron jobs.
+
+Data is **not** real-time; FinViz ToS applies.
+
+---
+
 ## Included Scans (shared IDs)
 
 Used as keys in **`webhooks.json`** and as **`/scans`** choices (except the synthetic **All scans** option).
@@ -304,11 +319,17 @@ PradBot-Finviz-To-Discord/
   # Webhook posters
   post_scans_elite.py
   post_scans_free.py
+  post_heatmaps_elite.py   # v=152 heatmaps → Discord PNGs
   webhooks.example.json  # Copy → webhooks.json (webhook product only)
 
   # Shared by /scans and post_scans_elite (fetch_scan / fetch_scan_with_screener)
   scan_registry.py
   fetch_elite.py
+  fetch_v152_universe.py
+  heatmap_aggregate.py
+  heatmap_pipeline.py
+  heatmap_treemap.py
+  heatmap_figures.py
   discord_payload.py
 
   # PradBot + Elite poster helpers
@@ -340,6 +361,10 @@ PradBot-Finviz-To-Discord/
 **PradBot — slash commands missing** — With **global** sync (no `GUILD_ID`), wait up to ~1 hour after code changes, then restart `bot.py`. If **`GUILD_ID` is set**, commands exist **only on that server** — update the ID if you moved servers. Invite must include **`applications.commands`**. If globals were cleared earlier, comment out **`GUILD_ID`**, restart once to restore global commands, or fix **`GUILD_ID`** and restart.
 
 **PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
+
+**Heatmaps — `post_heatmaps_elite.py` times out or returns HTML** — Increase `FINVIZ_V152_EXPORT_TIMEOUT_SEC` (e.g. **300**). Confirm Elite auth and stable network; the v=152 export is a single large CSV.
+
+**Heatmaps — Discord upload fails** — Check webhook URL; Discord allows up to **10** files per message (this script sends **one** PNG per run).
 
 **PradBot — chart / FinViz errors** — Confirm Elite subscription and `FINVIZ_API_KEY`.
 

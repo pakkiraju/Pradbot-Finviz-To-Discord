@@ -16,5 +16,6 @@
     "julian_komar_strongest":   "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
     "earnings_calendar_week":   "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
     "top_gainers":              "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
-    "top_losers":               "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
+    "top_losers":               "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "heatmaps":                 "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
 }

@@ -59,13 +59,16 @@ def _append_auth(url: str) -> str:
     return f"{url}{sep}auth={api_key}"
 
 
-def _fetch_csv(url: str, caller: str = "") -> list[dict]:
-    """GET a CSV export URL with retries and return list of row dicts."""
+def fetch_csv_export(url: str, caller: str = "", timeout: int = 30) -> list[dict]:
+    """GET a CSV export URL with retries and return list of row dicts.
+
+    Use a larger *timeout* (e.g. 120–180) for very large v=152 full-universe exports.
+    """
     authed_url = _append_auth(url)
 
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.get(authed_url, headers=_HEADERS, timeout=30)
+            resp = requests.get(authed_url, headers=_HEADERS, timeout=timeout)
             if resp.status_code == 429:
                 wait = (2 ** attempt) * 15
                 logger.warning("[%s] 429 rate limit, waiting %ds (attempt %d)", caller, wait, attempt + 1)
@@ -100,6 +103,11 @@ def _fetch_csv(url: str, caller: str = "") -> list[dict]:
     except Exception as e:
         logger.warning("[%s] CSV parse failed: %s", caller, e)
         return []
+
+
+def _fetch_csv(url: str, caller: str = "") -> list[dict]:
+    """GET a CSV export URL (default 30s timeout)."""
+    return fetch_csv_export(url, caller=caller, timeout=30)
 
 
 def _parse_num(s) -> float | None:
