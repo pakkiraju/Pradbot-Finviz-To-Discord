@@ -14,7 +14,7 @@ This repository ships **three** standalone products that live in the same folder
 
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener; footer notes delayed quotes.
 - **`/heatmap`** — Same **nested treemap** pipeline as **`post_heatmaps_elite.py`** (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
-- **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild + global** sync (test server updates immediately; other servers within ~1 hour). **`SLASH_GUILD_ONLY=1`** = guilds only. **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** only makes sense with guild-only mode (see **§5**).
+- **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
 
 ---
@@ -64,7 +64,7 @@ Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
 - **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
-- **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot **also** syncs **globally** so every other server gets commands (see **§5**). Use **`SLASH_GUILD_ONLY=1`** to register only on listed guilds. Leave **`GUILD_ID`** blank for **global‑only** registration.
+- **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
 
@@ -93,8 +93,9 @@ After this, PradBot appears in the member list (offline until you run `bot.py`).
 | Mode | `.env` | Behavior |
 |------|--------|----------|
 | **Global only** | No `GUILD_ID` | Commands register for **all servers**; updates can take **up to ~1 hour** everywhere. |
-| **Test + global (default when `GUILD_ID` set)** | `GUILD_ID=<test id(s)>` | **Guild** sync: instant on your test server(s). **Then** **global** sync: all other servers get commands within ~**1 hour**. |
-| **Guild only** | `GUILD_ID=…` and `SLASH_GUILD_ONLY=1` | Commands **only** on listed servers (seconds). No global — other servers **won’t** get updates. |
+| **Guild only (default when `GUILD_ID` set)** | `GUILD_ID=<test id(s)>` | **Guild** sync only: instant on listed server(s). **No** global — other servers **won’t** get commands unless you add **`SLASH_SYNC_GLOBAL_ALSO=1`**. |
+| **Dual sync (test + global)** | `GUILD_ID=…` and `SLASH_SYNC_GLOBAL_ALSO=1` | Guild sync (instant) **and** global sync (other servers within ~**1 hour**). Your test guild **may show duplicate** slash entries (guild + global). |
+| **Force guild-only** | `GUILD_ID=…` and `SLASH_GUILD_ONLY=1` | Overrides **`SLASH_SYNC_GLOBAL_ALSO`**: commands **only** on listed guilds. |
 
 **How to get your server (guild) ID**
 
@@ -115,15 +116,15 @@ GUILD_ID=111111111111111111,222222222222222222
 
 (Use real IDs; they are usually 17–19 digits.)
 
-5. Restart `bot.py`. You should see logs for **guild** sync (instant on test) and **global** sync (other servers within ~1 hour). On the **test** server, Discord may briefly show **duplicate** slash entries (guild + global) until global propagation settles — that is normal for dual sync.
+5. Restart `bot.py`. With **`GUILD_ID` only**, logs show **guild** sync (instant). Add **`SLASH_SYNC_GLOBAL_ALSO=1`** if you also want **global** sync logs and updates on other servers (~1 hour).
 
 **Production without a test guild:** Remove `GUILD_ID` so only **global** sync runs.
 
-**Guild-only (old behavior):** Set **`SLASH_GUILD_ONLY=1`** — commands exist **only** on the guild(s) in `GUILD_ID`; other servers will **not** receive them.
+**Other servers need commands too:** Set **`SLASH_SYNC_GLOBAL_ALSO=1`** alongside **`GUILD_ID`**, or remove **`GUILD_ID`** and rely on global-only sync.
 
-**Re-invited the bot or joined a new server and see no commands?** With **dual** sync (default), wait for **global** propagation (~1 hour) or restart after Discord catches up. With **`SLASH_GUILD_ONLY=1`**, add that server’s ID to `GUILD_ID` or switch to dual/global.
+**Re-invited the bot or joined a new server and see no commands?** With **global** or **dual** sync, wait for **global** propagation (~1 hour). With **guild-only** (`GUILD_ID` without **`SLASH_SYNC_GLOBAL_ALSO`**), only listed guilds have commands — add that server’s ID to **`GUILD_ID`** or enable global sync.
 
-**Duplicate `/command` lines:** With **`SLASH_GUILD_ONLY=1`**, you can set **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1`** to clear globals (see `.env.example`). **Do not** use dedupe when **global** sync is enabled — it would remove commands from other servers.
+**Duplicate `/command` lines:** Usually from **dual** sync (guild + global) or **stale globals** after changing modes. Prefer **guild-only** (default with **`GUILD_ID`**) or run **once** with **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1`** while **not** using **`SLASH_SYNC_GLOBAL_ALSO`** to wipe old global registrations. **Do not** use dedupe when **global** sync is enabled — it would remove commands from servers that only have globals.
 
 #### 6) Run PradBot
 
@@ -380,7 +381,7 @@ PradBot-Finviz-To-Discord/
 
 **Webhook posters — 429 (free)** — Increase `FINVIZ_FREE_DELAY_SEC` if needed.
 
-**PradBot — slash commands missing** — With **global** or **dual** sync, wait up to ~1 hour on servers that only get **global** registration. With **`SLASH_GUILD_ONLY=1`**, commands exist **only** on guilds in **`GUILD_ID`**. Invite must include **`applications.commands`**. If globals were cleared earlier, restart after fixing `.env`; avoid **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** when using dual/global sync.
+**PradBot — slash commands missing** — With **global** or **dual** sync, wait up to ~1 hour on servers that only get **global** registration. With **`GUILD_ID`** and no **`SLASH_SYNC_GLOBAL_ALSO`**, commands exist **only** on listed guilds. Invite must include **`applications.commands`**. If globals were cleared earlier, restart after fixing `.env`; avoid **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** when using **`SLASH_SYNC_GLOBAL_ALSO`**.
 
 **PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
 

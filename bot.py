@@ -3,9 +3,9 @@
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
 
-Optional GUILD_ID: test server ID(s) for instant guild sync; by default we also sync globally
-so every other server gets commands (up to ~1 hour). Set SLASH_GUILD_ONLY=1 for guild-only (old behavior).
-If GUILD_ID is unset, commands sync globally only.
+Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only (no global) so test
+servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
+SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
 /scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters).
 """
@@ -149,6 +149,9 @@ def _env_truthy(name: str) -> bool:
 async def on_ready():
     guild_id_raw = os.environ.get("GUILD_ID", "").strip()
     guild_only = _env_truthy("SLASH_GUILD_ONLY")
+    sync_global_also = _env_truthy("SLASH_SYNC_GLOBAL_ALSO")
+    # Dual sync only when explicitly requested; avoids duplicate /command rows on test guilds.
+    should_sync_global = sync_global_also and not guild_only
 
     if guild_id_raw:
         guild_ids = _parse_guild_ids(guild_id_raw)
@@ -169,39 +172,46 @@ async def on_ready():
                 guild_ids,
             )
 
-            if not guild_only:
+            if should_sync_global:
                 await tree.sync()
                 logger.info(
-                    "Also synced slash commands globally — other servers update within ~1 hour "
-                    "(test guild(s) may briefly show duplicate entries until global catches up)"
+                    "Also synced slash commands globally (SLASH_SYNC_GLOBAL_ALSO=1) — other servers "
+                    "update within ~1 hour; this test guild may show duplicate entries until Discord dedupes"
                 )
             else:
-                logger.info(
-                    "SLASH_GUILD_ONLY=1 — no global sync; only listed guild(s) have commands"
-                )
+                if guild_only:
+                    logger.info(
+                        "SLASH_GUILD_ONLY=1 — no global sync; only listed guild(s) have commands"
+                    )
+                else:
+                    logger.info(
+                        "Slash commands on guild(s) only (no global sync). "
+                        "Set SLASH_SYNC_GLOBAL_ALSO=1 to register globally for other servers. "
+                        "If commands still appear twice, restart once with SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1 "
+                        "to remove stale global registrations."
+                    )
 
-            # Guild-only mode: optional clear of global commands to avoid duplicate /command lines in picker.
-            # Do not clear when we also sync globally — other servers need those registrations.
-            if guild_only and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
+            # Optional clear of global commands when we are not syncing globals (dedupe after old dual-sync runs).
+            if should_sync_global and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
+                logger.warning(
+                    "SLASH_CLEAR_GLOBAL_FOR_DEDUPE ignored while global sync is enabled "
+                    "(incompatible — would remove commands from servers that only have globals)"
+                )
+            elif not should_sync_global and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
                 app_id = bot.application_id
                 if app_id is not None:
                     try:
                         await bot.http.bulk_upsert_global_commands(app_id, [])
                         logger.info(
-                            "Cleared global slash commands (SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1, guild-only mode)"
+                            "Cleared global slash commands (SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1)"
                         )
                     except discord.HTTPException as e:
                         logger.warning("Could not clear global slash commands: %s", e)
-            elif not guild_only and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
-                logger.warning(
-                    "SLASH_CLEAR_GLOBAL_FOR_DEDUPE ignored while global sync is enabled "
-                    "(unset SLASH_GUILD_ONLY if you want dedupe — not compatible with dual sync)"
-                )
     else:
         await tree.sync()
         logger.info(
-            "Synced slash commands globally (set GUILD_ID for instant test guild(s); "
-            "defaults to guild + global dual sync when GUILD_ID is set)"
+            "Synced slash commands globally (set GUILD_ID for instant guild sync; "
+            "add SLASH_SYNC_GLOBAL_ALSO=1 with GUILD_ID for dual sync)"
         )
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
