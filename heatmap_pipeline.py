@@ -1,6 +1,6 @@
 """Shared heatmap pipeline: FinViz v=152 full export → treemap PNG (FinViz-style).
 
-Used by **PradBot** `/heatmap` and **`post_heatmaps_elite.py`** (scheduled webhook).
+Used by **PradBot** `/heatmap`.
 """
 
 from __future__ import annotations

@@ -1,24 +1,22 @@
 # PradBot-Finviz-To-Discord
 
-This repository ships **three** standalone products that live in the same folder and share library code. Use any combination; they do not depend on each other at runtime.
+This repository ships **two** standalone products that live in the same folder and share library code. Use either or both; they do not depend on each other at runtime.
 
 | Product | What it is | How it talks to Discord |
 |--------|------------|-------------------------|
-| **PradBot** | Long-running Discord **application** (`bot.py`) | Bot user + slash commands in channels |
+| **PradBot** | Long-running Discord **application** (`bot.py`) | Bot user + slash commands in channels (including **`/heatmap`** via shared pipeline code) |
 | **Scan webhook posters** | One-shot **CLI scripts** (`post_scans_elite.py` / `post_scans_free.py`) | Incoming webhooks per channel (URLs in `webhooks.json`) |
-| **Daily heatmaps poster** | **`post_heatmaps_elite.py`** — v=152 full-universe CSV, nested sector/industry/stock treemap | One incoming webhook (`heatmaps` key or `HEATMAP_WEBHOOK_URL`), PNG attachments |
 
 **Shared code (not a third product):** The Elite webhook script and PradBot’s **`/scans`** command both use the same pipeline: **`fetch_elite.fetch_scan`** / **`fetch_scan_with_screener`** (for the correct FinViz link, including Top Gainers/Losers), **`scan_registry`**, and **`discord_payload.build_embeds`**. PradBot does **not** execute `post_scans_elite.py`; it calls the same Python functions directly so tables match the Elite poster.
 
 ### Recent changes (at a glance)
 
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener; footer notes delayed quotes.
-- **`/heatmap`** — Same **nested treemap** pipeline as **`post_heatmaps_elite.py`** (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
+- **`/heatmap`** — **Nested treemap** from FinViz **v=152** full export (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
 - **`/inplay`** — FinViz Elite screener: **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**. Embed lists symbol, price, change, volume, and a per-row **`[news](…)`** link (v=152 export for **News URL**; screener link uses **v=151**).
 - **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
 - **`/markets` removed** — The experimental multi-futures snapshot slash command and **`finviz_markets.py`** were dropped; **`finviz_chart`** no longer exposes futures-only helpers. Use **`/chart`** per symbol as needed.
-
 ---
 
 ## Product 1 — PradBot (`bot.py`)
@@ -152,7 +150,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/earnings [period]` | **Today** or **Weekly** earnings from FinViz Elite (**v=152**); monospace table: time (incl. BMO/AMC text), price, volume, avg vol, change %; needs `FINVIZ_API_KEY` |
 | `/inplay` | **In play** — news today/yesterday, price >$1, avg vol >1M, vol >500K, rel vol >1.5; symbol, price, change, vol, **`[news](url)`** per row; needs `FINVIZ_API_KEY` |
 | `/heatmap [universe]` | Nested performance treemap: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000**; needs `FINVIZ_API_KEY` |
-| `/evsize <side> <entry> <target> <stop> <probability> <daily_risk>` | EV grade (A+ … D) + Kelly-based position sizing (ephemeral reply) |
+| `/evsize <side> <entry> <target> <stop> <probability> <daily_risk> [kelly_fraction]` | EV grade (A+ … D) + Kelly-based sizing: **¼ / ½ / full** Kelly of full Kelly (default **½**); ephemeral reply |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
 | `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
 
@@ -170,6 +168,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /purge amount:10
 /purge amount:all
 /evsize side:Long entry:185.00 target:195.00 stop:182.00 probability:55 daily_risk:1000
+/evsize side:Long entry:185.00 target:195.00 stop:182.00 probability:55 daily_risk:1000 kelly_fraction:Quarter Kelly (¼)
 /evsize side:Short entry:420.00 target:400.00 stop:430.00 probability:60 daily_risk:2000
 /top_gainers
 /top_gainers min_price:5 min_volume:500000
@@ -198,9 +197,9 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 
 **What `/inplay` shows:** Applies the FinViz filters **news today|yesterday**, **sh_avgvol_o1000** (avg vol >1M), **sh_curvol_o500** (>500K current volume), **sh_price_o1** (>$1), **sh_relvol_o1.5** (rel vol >1.5), ordered by **change %** (descending). Fetches a **v=152** Elite export (full column set so **News URL** is present); the embed **title URL** opens the **v=151** screener. Up to **20** rows in a **Markdown table** (Symbol, Price, Change, Vol, News); the News column is **`[news](…)`** (not inside a code block, so links stay clickable). If **News URL** is missing, the link falls back to the symbol’s FinViz quote **news** tab. Requires `FINVIZ_API_KEY`.
 
-**What `/heatmap` shows:** One or more **PNG** treemap images built from the same **v=152** full-universe export as **`post_heatmaps_elite.py`**, filtered to tickers whose **Index** column matches the chosen benchmark. Embed describes size/color, **as-of** date, and links the FinViz screener. First run can take **1–3 minutes**; increase **`FINVIZ_V152_EXPORT_TIMEOUT_SEC`** if the HTTP fetch times out. Requires `FINVIZ_API_KEY`.
+**What `/heatmap` shows:** One or more **PNG** treemap images built from a **v=152** full-universe export, filtered to tickers whose **Index** column matches the chosen benchmark. Embed describes size/color, **as-of** date, and links the FinViz screener. First run can take **1–3 minutes**; increase **`FINVIZ_V152_EXPORT_TIMEOUT_SEC`** if the HTTP fetch times out. Requires `FINVIZ_API_KEY`.
 
-**What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Computes reward (R), risk (L), R:L ratio, EV per share, EV/R, full Kelly fraction, and applies **¼ Kelly** (capped at 50% of daily budget) to suggest a dollar risk for the trade and approximate share count. Grades the setup **A+ through D** based on EV/R. Reply is **ephemeral** (only visible to you). No FinViz key needed. Educational tool, not financial advice.
+**What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Optional **`kelly_fraction`:** **Quarter**, **Half** (default), or **Full** Kelly — i.e. that fraction of the **full Kelly** share of the daily budget, then **capped at 50%** of the daily budget per trade. Computes R, L, R:L, EV/share, EV/R, and suggested dollar risk and share count. Grades **A+ through D** from EV/R. Reply is **ephemeral**. No FinViz key needed. Educational tool, not financial advice.
 
 **What `/news` / `/quote` show:** Headlines and links (news); combined panel with chart, OHLCV, recent days, and headlines (quote).
 
@@ -293,20 +292,6 @@ Scripts exit after one run. Use Task Scheduler, cron, etc.:
 
 ---
 
-## Product 3 — Daily heatmaps (`post_heatmaps_elite.py`)
-
-**Elite only.** Downloads the same **full v=152** custom export (all columns, full symbol universe in one `export.ashx` request — large CSV, **~2–3 minute** HTTP timeout by default). Builds a **nested treemap** (sector → industry → stocks; size = market cap, color = change %) and posts **one** PNG per run via webhook multipart upload. The same pipeline powers PradBot **`/heatmap`**.
-
-- **PradBot `/heatmap`:** choose **universe** only — **S&P 500** (default), **NASDAQ 100**, **Dow**, or **Russell 2000** (FinViz Index column; includes both stocks and ETFs in that benchmark). Options for market-cap tier, asset class (stocks vs ETFs), and sector/theme substring were **removed** to keep the command simple.
-- **Requirements:** `FINVIZ_API_KEY`, `pip install -r requirements.txt` (adds **pandas**, **matplotlib**). Optional: `FINVIZ_V152_EXPORT_TIMEOUT_SEC` (default **180**).
-- **Webhook:** Add **`"heatmaps": "https://discord.com/api/webhooks/..."`** to **`webhooks.json`**, or set **`HEATMAP_WEBHOOK_URL`** in `.env` (overrides JSON).
-- **Run:** `python post_heatmaps_elite.py` — use **`--dry-run`** to fetch and build images without posting.
-- **Scheduling:** Run once per day after the cash session (FinViz quotes are delayed ~15 minutes). One run = one heavy FinViz pull; avoid overlapping cron jobs.
-
-Data is **not** real-time; FinViz ToS applies.
-
----
-
 ## Included Scans (shared IDs)
 
 Used as keys in **`webhooks.json`** and as **`/scans`** choices (except the synthetic **All scans** option).
@@ -348,10 +333,9 @@ PradBot-Finviz-To-Discord/
   # Webhook posters
   post_scans_elite.py
   post_scans_free.py
-  post_heatmaps_elite.py   # v=152 heatmaps → Discord PNGs
   webhooks.example.json  # Copy → webhooks.json (webhook product only)
 
-  # Shared by /scans and post_scans_elite (fetch_scan / fetch_scan_with_screener)
+  # Shared: /scans + post_scans_elite; heatmap_* used by PradBot /heatmap
   scan_registry.py
   fetch_elite.py
   fetch_v152_universe.py
@@ -392,9 +376,7 @@ PradBot-Finviz-To-Discord/
 
 **PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
 
-**Heatmaps — `post_heatmaps_elite.py` times out or returns HTML** — Increase `FINVIZ_V152_EXPORT_TIMEOUT_SEC` (e.g. **300**). Confirm Elite auth and stable network; the v=152 export is a single large CSV.
-
-**Heatmaps — Discord upload fails** — Check webhook URL; Discord allows up to **10** files per message (this script sends **one** PNG per run).
+**PradBot — `/heatmap` times out or returns HTML** — Increase `FINVIZ_V152_EXPORT_TIMEOUT_SEC` (e.g. **300**). Confirm Elite auth and stable network; the v=152 export is a single large CSV.
 
 **PradBot — chart / FinViz errors** — Confirm Elite subscription and `FINVIZ_API_KEY`.
 

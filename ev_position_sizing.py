@@ -8,7 +8,7 @@ Kelly criterion for binary payoffs:
   b = R / L
   f* = (p * b - q) / b   where p = win prob, q = 1 - p
 
-Conservative sizing uses fractional Kelly (default ¼) capped per trade.
+Sizing uses **fractional Kelly** (default **½ Kelly**) of the full Kelly fraction, then a per-trade cap.
 """
 
 from __future__ import annotations
@@ -20,8 +20,11 @@ from dataclasses import dataclass
 # Tunable constants
 # ---------------------------------------------------------------------------
 
-FRACTIONAL_KELLY: float = 0.25
-"""Fraction of full Kelly to use (¼ Kelly is conservative)."""
+# Default when callers omit an explicit fraction (e.g. `/evsize` default = half Kelly).
+DEFAULT_FRACTIONAL_KELLY: float = 0.5
+
+ALLOWED_FRACTIONAL_KELLY: frozenset[float] = frozenset({0.25, 0.5, 1.0})
+"""Supported fractional Kelly multipliers (¼, ½, full)."""
 
 MAX_SINGLE_TRADE_FRACTION: float = 0.50
 """Hard cap: one trade can never risk more than this share of the daily budget."""
@@ -57,7 +60,8 @@ class EVResult:
     ev_per_share: float
     evr: float          # EV / L
     f_kelly: float      # full Kelly fraction
-    f_trade: float      # fractional Kelly (capped)
+    f_trade: float      # fraction of daily budget after fractional Kelly (capped)
+    kelly_fraction: float  # multiplier on full Kelly (e.g. 0.25, 0.5, 1.0)
     suggested_risk: float  # USD risk for this trade
     shares: int         # floor(suggested_risk / L)
     grade: str
@@ -112,10 +116,21 @@ def compute(
     stop: float,
     probability: float,
     daily_risk: float,
+    *,
+    fractional_kelly: float = DEFAULT_FRACTIONAL_KELLY,
 ) -> EVResult:
-    """Run full EV / Kelly / grade computation. Raises SizingError on bad inputs."""
+    """Run full EV / Kelly / grade computation. Raises SizingError on bad inputs.
+
+    ``fractional_kelly`` is the fraction of **full** Kelly to use (¼, ½, or 1.0).
+    """
     side = side.lower().strip()
     _validate(side, entry, target, stop, probability, daily_risk)
+
+    fk = float(fractional_kelly)
+    if fk not in ALLOWED_FRACTIONAL_KELLY:
+        raise SizingError(
+            "Fractional Kelly must be one of: **¼**, **½**, or **full** (use the command option)."
+        )
 
     p = probability / 100.0
     q = 1.0 - p
@@ -133,7 +148,7 @@ def compute(
 
     f_kelly = (p * b - q) / b if b > 0 else 0.0
 
-    f_trade = max(0.0, f_kelly) * FRACTIONAL_KELLY
+    f_trade = max(0.0, f_kelly) * fk
     f_trade = min(f_trade, MAX_SINGLE_TRADE_FRACTION)
 
     suggested = daily_risk * f_trade
@@ -153,6 +168,7 @@ def compute(
         evr=evr,
         f_kelly=f_kelly,
         f_trade=f_trade,
+        kelly_fraction=fk,
         suggested_risk=round(suggested, 2),
         shares=shares,
         grade=grade_from_evr(evr),

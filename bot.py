@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
 """
 
 import asyncio
@@ -985,6 +985,12 @@ _SIDE_CHOICES = [
     app_commands.Choice(name="Short", value="short"),
 ]
 
+_KELLY_FRACTION_CHOICES = [
+    app_commands.Choice(name="Quarter Kelly (¼)", value="0.25"),
+    app_commands.Choice(name="Half Kelly (½)", value="0.5"),
+    app_commands.Choice(name="Full Kelly", value="1.0"),
+]
+
 _GRADE_COLORS = {
     "A+": 0x00C853, "A": 0x00E676, "A-": 0x69F0AE,
     "B+": 0xFFD600, "B": 0xFFEA00, "B-": 0xFFF176,
@@ -994,6 +1000,16 @@ _GRADE_COLORS = {
 
 def _pct(v: float) -> str:
     return f"{v * 100:+.2f}%"
+
+
+def _kelly_mode_label(fraction: float) -> str:
+    if abs(fraction - 0.25) < 1e-9:
+        return "Quarter Kelly (¼)"
+    if abs(fraction - 0.5) < 1e-9:
+        return "Half Kelly (½)"
+    if abs(fraction - 1.0) < 1e-9:
+        return "Full Kelly"
+    return f"{fraction:.0%} of full Kelly"
 
 
 def _build_ev_embed(r: EVResult) -> discord.Embed:
@@ -1035,9 +1051,11 @@ def _build_ev_embed(r: EVResult) -> discord.Embed:
             "Consider passing or improving the R:L ratio."
         )
     else:
+        mode = _kelly_mode_label(r.kelly_fraction)
         sizing_text = (
+            f"**Mode:** {mode}\n"
             f"**Full Kelly:** {_pct(r.f_kelly)}\n"
-            f"**¼ Kelly used:** {_pct(r.f_trade)}\n"
+            f"**Fraction of daily budget:** {_pct(r.f_trade)}\n"
             f"**Daily budget:** ${r.daily_risk:,.2f}\n"
             f"**Suggested risk:** ${r.suggested_risk:,.2f}\n"
             f"**Shares:** {r.shares:,}"
@@ -1046,7 +1064,7 @@ def _build_ev_embed(r: EVResult) -> discord.Embed:
     embed.add_field(name="Position Sizing", value=sizing_text, inline=False)
 
     embed.set_footer(
-        text="Educational tool only — not financial advice. Uses ¼ Kelly with 50% single-trade cap."
+        text="Educational tool only — not financial advice. Fractional Kelly + 50% single-trade cap on daily budget."
     )
     return embed
 
@@ -1059,8 +1077,10 @@ def _build_ev_embed(r: EVResult) -> discord.Embed:
     stop="Stop-loss price",
     probability="Win probability (0-100%)",
     daily_risk="Max loss budget for the day in USD",
+    kelly_fraction="Fraction of full Kelly (default: half)",
 )
 @app_commands.choices(side=_SIDE_CHOICES)
+@app_commands.choices(kelly_fraction=_KELLY_FRACTION_CHOICES)
 async def evsize_command(
     interaction: discord.Interaction,
     side: app_commands.Choice[str],
@@ -1069,8 +1089,10 @@ async def evsize_command(
     stop: float,
     probability: float,
     daily_risk: float,
+    kelly_fraction: app_commands.Choice[str] | None = None,
 ):
     try:
+        fk = float(kelly_fraction.value) if kelly_fraction is not None else 0.5
         result = ev_compute(
             side=side.value,
             entry=entry,
@@ -1078,6 +1100,7 @@ async def evsize_command(
             stop=stop,
             probability=probability,
             daily_risk=daily_risk,
+            fractional_kelly=fk,
         )
     except SizingError as e:
         await interaction.response.send_message(str(e), ephemeral=True)
@@ -1086,9 +1109,9 @@ async def evsize_command(
     embed = _build_ev_embed(result)
     await interaction.response.send_message(embed=embed, ephemeral=True)
     logger.info(
-        "evsize %s entry=%.2f target=%.2f stop=%.2f prob=%.1f risk=%.2f -> grade=%s $%.2f by %s",
+        "evsize %s entry=%.2f target=%.2f stop=%.2f prob=%.1f risk=%.2f kelly_frac=%s -> grade=%s $%.2f by %s",
         result.side, entry, target, stop, probability, daily_risk,
-        result.grade, result.suggested_risk, interaction.user,
+        result.kelly_fraction, result.grade, result.suggested_risk, interaction.user,
     )
 
 
