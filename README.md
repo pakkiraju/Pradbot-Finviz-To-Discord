@@ -17,7 +17,6 @@ This repository ships **two** standalone products that live in the same folder a
 - **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
 - **`/markets` removed** — The experimental multi-futures snapshot slash command and **`finviz_markets.py`** were dropped; **`finviz_chart`** no longer exposes futures-only helpers. Use **`/chart`** per symbol as needed.
-
 ---
 
 ## Product 1 — PradBot (`bot.py`)
