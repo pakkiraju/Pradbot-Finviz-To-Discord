@@ -17,6 +17,7 @@ This repository ships **three** standalone products that live in the same folder
 - **`/inplay`** — FinViz Elite screener: **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**. Embed lists symbol, price, change, volume, and a per-row **`[news](…)`** link (v=152 export for **News URL**; screener link uses **v=151**).
 - **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
+- **`/markets` removed** — The experimental multi-futures snapshot slash command and **`finviz_markets.py`** were dropped; **`finviz_chart`** no longer exposes futures-only helpers. Use **`/chart`** per symbol as needed.
 
 ---
 
@@ -30,7 +31,6 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 |---|---|
 | `/chart AAPL` | FinViz candlestick chart (**default: Daily**) |
 | `/chart MSFT` | **Timeframe** dropdown: **1m, 3m, 5m, 15m, 30m, 1h**, **Daily**, **Weekly**, **Monthly** |
-| `/markets` | **Eight** futures/index charts (NQ, ES, YM, ER2, VX, NKD, EX, DY); same timeframe options as `/chart` (default **Daily**) |
 | `/gex AAPL` | **GEX** (nearest future expiry or optional date) |
 | `/zerodte AAPL` | **0DTE** OI-style analysis |
 | `/news AAPL` | Latest **5** news links |
@@ -65,7 +65,7 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/markets`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
@@ -143,7 +143,6 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | Command | Description |
 |---|---|
 | `/chart <symbol> [timeframe]` | FinViz chart (**timeframe:** 1m–1h intraday, Daily, Weekly, Monthly) |
-| `/markets [timeframe]` | Eight futures snapshot PNGs (see **What `/markets` shows**); needs `FINVIZ_API_KEY` |
 | `/gex <symbol> [expiry]` | GEX / options (optional YYYY-MM-DD) |
 | `/zerodte <symbol>` | 0DTE analysis |
 | `/news <symbol>` | 5 articles with links |
@@ -164,8 +163,6 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /chart symbol:MSFT timeframe:Weekly
 /chart symbol:SPY timeframe:5 minute
 /chart symbol:TSLA timeframe:1 hour
-/markets
-/markets timeframe:5 minute
 /gex symbol:AAPL
 /zerodte symbol:SPY
 /news symbol:TSLA
@@ -188,8 +185,6 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 ```
 
 **What `/chart` shows:** Downloads a **candlestick PNG** from **`elite.finviz.com/chart.ashx`** (`ty=c`, `ta=1`, `s=l`) with **`p=`** set from the timeframe: **1 / 3 / 5 / 15 / 30 minute** (`i1`–`i30`), **1 hour** (`h`), **Daily / Weekly / Monthly** (`d` / `w` / `m`). Default is **Daily**. Intraday charts need **FinViz Elite** (real-time / extended-hours behavior per FinViz). Requires `FINVIZ_API_KEY`.
-
-**What `/markets` shows:** Fetches **eight** charts in order: **Nasdaq 100** (`NQ`), **S&P 500** (`ES`), **DJIA** (`YM`), **Russell 2000** (`ER2`), **VIX** (`VX`), **Nikkei 225** (`NKD`), **Euro Stoxx 50** (`EX`), **DAX** (`DY`). Uses the same **`p=`** timeframes as **`/chart`** (default **Daily**). Requests are spaced by **`FINVIZ_ELITE_DELAY_SEC`** between symbols. Posts one embed plus up to **eight** PNG attachments; symbols that fail are listed in the embed. Requires `FINVIZ_API_KEY`.
 
 **What `/scans` does:** Uses **`fetch_elite.fetch_scan_with_screener`** (rows + FinViz URL for the embed link), **`discord_payload.build_embeds`** — the **same building blocks** as **`post_scans_elite.py`**, but posts into the channel via the bot. **All scans** sends many messages over several minutes.
 
@@ -368,7 +363,6 @@ PradBot-Finviz-To-Discord/
 
   # PradBot + Elite poster helpers
   finviz_chart.py
-  finviz_markets.py
   finviz_earnings.py
   finviz_inplay.py
   finviz_options.py

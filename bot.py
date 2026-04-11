@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /markets uses finviz_markets (multi futures snapshot).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
 """
 
 import asyncio
@@ -42,7 +42,6 @@ from finviz_earnings import (
     format_earnings_embed_description,
 )
 from finviz_inplay import fetch_inplay_rows, format_inplay_description
-from finviz_markets import fetch_markets_charts
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -276,67 +275,6 @@ async def chart_command(interaction: discord.Interaction, symbol: str, timeframe
     embed.set_footer(text="Data from FinViz")
 
     await interaction.followup.send(embed=embed, file=file)
-
-
-@tree.command(
-    name="markets",
-    description="Futures snapshot: NQ, ES, YM, ER2, VX, NKD, EX, DY (same timeframes as /chart)",
-)
-@app_commands.describe(timeframe="Chart timeframe (default Daily)")
-@app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
-async def markets_command(
-    interaction: discord.Interaction,
-    timeframe: app_commands.Choice[str] | None = None,
-):
-    if not os.environ.get("FINVIZ_API_KEY", "").strip():
-        await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/markets`.", ephemeral=True
-        )
-        return
-
-    tf = timeframe.value if timeframe else "d"
-    tf_label = CHART_TIMEFRAME_LABELS.get(tf, "Daily")
-    tf_tag = CHART_TIMEFRAME_FILE_TAG.get(tf, "daily")
-
-    await interaction.response.defer()
-    rows = await asyncio.to_thread(fetch_markets_charts, tf)
-
-    lines = [f"**Timeframe:** {tf_label}", ""]
-    files: list[discord.File] = []
-    failed_syms: list[str] = []
-    for i, (label, sym, data) in enumerate(rows, start=1):
-        lines.append(f"{i}. {label} (`{sym}`)")
-        if data is not None:
-            fname = f"{i:02d}_{sym}_{tf_tag}.png"
-            files.append(discord.File(io.BytesIO(data), filename=fname))
-        else:
-            failed_syms.append(sym)
-
-    desc = "\n".join(lines)
-    if failed_syms:
-        desc += f"\n\n**No chart returned:** {', '.join(f'`{s}`' for s in failed_syms)}"
-
-    if not files:
-        await interaction.followup.send(
-            "Could not fetch any market charts. Check **FINVIZ_API_KEY**, **FINVIZ_ELITE_DELAY_SEC**, and logs."
-        )
-        return
-
-    embed = discord.Embed(
-        title="Markets snapshot",
-        description=desc[:4096],
-        color=0x2ECC71,
-        url="https://elite.finviz.com/futures.ashx",
-    )
-    embed.set_footer(text="FinViz Elite • quotes delayed")
-    await interaction.followup.send(embed=embed, files=files)
-    logger.info(
-        "markets: %d chart(s), timeframe=%s, failed=%s for %s",
-        len(files),
-        tf,
-        failed_syms or "none",
-        interaction.user,
-    )
 
 
 # ---------------------------------------------------------------------------

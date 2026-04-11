@@ -101,7 +101,7 @@ def validate_symbol(symbol: str) -> str | None:
 
 
 def build_chart_url(symbol: str, timeframe: str = "d") -> str:
-    """Build the Finviz Elite chart image URL.
+    """Build the Finviz Elite **stock** chart image URL.
 
     Parameters
     ----------
@@ -122,6 +122,36 @@ def build_chart_url(symbol: str, timeframe: str = "d") -> str:
     return url
 
 
+def _download_chart_png(url: str, log_tag: str) -> bytes | None:
+    """GET *url* and return PNG bytes. Accepts PNG magic bytes regardless of Content-Type."""
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=30)
+            if resp.status_code == 429:
+                wait = (2 ** attempt) * 15
+                logger.warning("[%s] 429 rate limit, waiting %ds (attempt %d)", log_tag, wait, attempt + 1)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            logger.warning("[%s] request failed: %s (attempt %d)", log_tag, e, attempt + 1)
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep((2 ** attempt) * 5)
+            continue
+    else:
+        logger.error("[%s] failed after %d retries", log_tag, _MAX_RETRIES)
+        return None
+
+    data = resp.content
+    if len(data) >= 4 and data[:4] == b"\x89PNG":
+        return data
+
+    ct = resp.headers.get("Content-Type", "")
+    logger.warning("[%s] not a PNG (Content-Type=%s, len=%d)", log_tag, ct, len(data))
+    return None
+
+
 def fetch_chart(symbol: str, timeframe: str = "d") -> bytes | None:
     """Download a chart PNG from FinViz Elite.
 
@@ -138,35 +168,4 @@ def fetch_chart(symbol: str, timeframe: str = "d") -> bytes | None:
         return None
 
     url = build_chart_url(symbol, timeframe)
-
-    for attempt in range(_MAX_RETRIES):
-        try:
-            resp = requests.get(url, headers=_HEADERS, timeout=30)
-            if resp.status_code == 429:
-                wait = (2 ** attempt) * 15
-                logger.warning("[chart:%s] 429 rate limit, waiting %ds (attempt %d)", symbol, wait, attempt + 1)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            break
-        except requests.RequestException as e:
-            logger.warning("[chart:%s] request failed: %s (attempt %d)", symbol, e, attempt + 1)
-            if attempt < _MAX_RETRIES - 1:
-                time.sleep((2 ** attempt) * 5)
-            continue
-    else:
-        logger.error("[chart:%s] failed after %d retries", symbol, _MAX_RETRIES)
-        return None
-
-    content_type = resp.headers.get("Content-Type", "")
-    if "image" not in content_type:
-        logger.warning("[chart:%s] unexpected Content-Type: %s", symbol, content_type)
-        return None
-
-    data = resp.content
-    # PNG magic bytes: \x89PNG
-    if not data or data[:4] != b"\x89PNG":
-        logger.warning("[chart:%s] response is not a valid PNG (%d bytes)", symbol, len(data))
-        return None
-
-    return data
+    return _download_chart_png(url, f"chart:{symbol}")
