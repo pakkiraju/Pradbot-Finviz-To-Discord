@@ -17,6 +17,9 @@ _V152_COLUMNS = (
 )
 _V152_QUERY = f"v=152&ft=3&o=-index&c={_V152_COLUMNS}"
 
+# Same column list for other v=152 Elite exports (e.g. `/earnings` filtered screens).
+V152_EXPORT_COLUMNS = _V152_COLUMNS
+
 FINVIZ_V152_EXPORT_URL = "https://elite.finviz.com/export.ashx?" + _V152_QUERY
 FINVIZ_V152_SCREENER_URL = "https://elite.finviz.com/screener.ashx?" + _V152_QUERY
 

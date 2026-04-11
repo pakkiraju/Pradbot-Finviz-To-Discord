@@ -3,10 +3,11 @@
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
 
-Optional GUILD_ID: if set, slash commands sync to that server only (instant).
-If unset, commands sync globally (can take up to ~1 hour to appear everywhere).
+Optional GUILD_ID: test server ID(s) for instant guild sync; by default we also sync globally
+so every other server gets commands (up to ~1 hour). Set SLASH_GUILD_ONLY=1 for guild-only (old behavior).
+If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters).
 """
 
 import asyncio
@@ -32,6 +33,11 @@ from finviz_quote import fetch_quote
 from gex_compute import compute_gex
 from ev_position_sizing import compute as ev_compute, SizingError, EVResult
 from fetch_v152_universe import FINVIZ_V152_SCREENER_URL
+from finviz_earnings import (
+    EarningsPeriod,
+    fetch_earnings_rows,
+    format_earnings_embed_description,
+)
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -121,48 +127,81 @@ def _webhook_embed_dict_to_discord(em: dict) -> discord.Embed:
     return embed
 
 
+def _parse_guild_ids(raw: str) -> list[int]:
+    """Parse GUILD_ID: one ID or comma-separated IDs (whitespace allowed)."""
+    out: list[int] = []
+    for part in raw.replace(",", " ").split():
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            logger.warning("GUILD_ID skip invalid token %r (digits only)", part)
+    return out
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 @bot.event
 async def on_ready():
     guild_id_raw = os.environ.get("GUILD_ID", "").strip()
+    guild_only = _env_truthy("SLASH_GUILD_ONLY")
+
     if guild_id_raw:
-        try:
-            guild_id = int(guild_id_raw)
-        except ValueError:
+        guild_ids = _parse_guild_ids(guild_id_raw)
+        if not guild_ids:
             logger.error(
-                "GUILD_ID must be digits only (Discord server ID), got %r — using global sync",
+                "GUILD_ID has no valid Discord server IDs, got %r — using global sync",
                 guild_id_raw,
             )
             await tree.sync()
             logger.info("Synced slash commands globally (invalid GUILD_ID)")
         else:
-            guild = discord.Object(id=guild_id)
-            tree.copy_global_to(guild=guild)
-            await tree.sync(guild=guild)
-            # Optional: remove global slash registrations so the picker does not list each command twice
-            # (global + guild). Only enable after GUILD_ID matches the server you use — clearing globals
-            # with a wrong GUILD_ID or a new server leaves other servers with no commands until global sync.
-            if os.environ.get("SLASH_CLEAR_GLOBAL_FOR_DEDUPE", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            ):
+            for guild_id in guild_ids:
+                guild = discord.Object(id=guild_id)
+                tree.copy_global_to(guild=guild)
+                await tree.sync(guild=guild)
+            logger.info(
+                "Synced slash commands to guild(s) %s (instant)",
+                guild_ids,
+            )
+
+            if not guild_only:
+                await tree.sync()
+                logger.info(
+                    "Also synced slash commands globally — other servers update within ~1 hour "
+                    "(test guild(s) may briefly show duplicate entries until global catches up)"
+                )
+            else:
+                logger.info(
+                    "SLASH_GUILD_ONLY=1 — no global sync; only listed guild(s) have commands"
+                )
+
+            # Guild-only mode: optional clear of global commands to avoid duplicate /command lines in picker.
+            # Do not clear when we also sync globally — other servers need those registrations.
+            if guild_only and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
                 app_id = bot.application_id
                 if app_id is not None:
                     try:
                         await bot.http.bulk_upsert_global_commands(app_id, [])
                         logger.info(
-                            "Cleared global slash commands (SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1)"
+                            "Cleared global slash commands (SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1, guild-only mode)"
                         )
                     except discord.HTTPException as e:
                         logger.warning("Could not clear global slash commands: %s", e)
-            logger.info(
-                "Synced slash commands to guild %s (instant in this server; remove GUILD_ID for global sync)",
-                guild_id,
-            )
+            elif not guild_only and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
+                logger.warning(
+                    "SLASH_CLEAR_GLOBAL_FOR_DEDUPE ignored while global sync is enabled "
+                    "(unset SLASH_GUILD_ONLY if you want dedupe — not compatible with dual sync)"
+                )
     else:
         await tree.sync()
         logger.info(
-            "Synced slash commands globally (set GUILD_ID in .env for instant updates in one server)"
+            "Synced slash commands globally (set GUILD_ID for instant test guild(s); "
+            "defaults to guild + global dual sync when GUILD_ID is set)"
         )
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
@@ -690,6 +729,44 @@ async def top_losers_command(
     embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
+
+
+_EARNINGS_PERIOD_CHOICES = [
+    app_commands.Choice(name="Today", value="today"),
+    app_commands.Choice(name="Weekly (this week)", value="weekly"),
+]
+
+
+@tree.command(
+    name="earnings",
+    description="Stocks with earnings today or this week (time, price, volume, avg vol, change)",
+)
+@app_commands.describe(period="Earnings date filter")
+@app_commands.choices(period=_EARNINGS_PERIOD_CHOICES)
+async def earnings_command(
+    interaction: discord.Interaction,
+    period: str = "today",
+):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/earnings`.", ephemeral=True
+        )
+        return
+
+    p: EarningsPeriod = "today" if period == "today" else "weekly"
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(fetch_earnings_rows, p)
+    desc = format_earnings_embed_description(rows, period=p)
+    title = "Earnings — today" if p == "today" else "Earnings — this week"
+    embed = discord.Embed(
+        title=title,
+        description=desc,
+        url=screener_url,
+        color=0x06B6D4,
+    )
+    embed.set_footer(text="FinViz Elite • quotes delayed")
+    await interaction.followup.send(embed=embed)
+    logger.info("earnings %s: %d rows for %s", p, len(rows), interaction.user)
 
 
 _HEATMAP_UNIVERSE_CHOICES = [

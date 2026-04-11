@@ -10,12 +10,12 @@ This repository ships **three** standalone products that live in the same folder
 
 **Shared code (not a third product):** The Elite webhook script and PradBot’s **`/scans`** command both use the same pipeline: **`fetch_elite.fetch_scan`** / **`fetch_scan_with_screener`** (for the correct FinViz link, including Top Gainers/Losers), **`scan_registry`**, and **`discord_payload.build_embeds`**. PradBot does **not** execute `post_scans_elite.py`; it calls the same Python functions directly so tables match the Elite poster.
 
-### Recent changes (batch scans + movers)
+### Recent changes (at a glance)
 
-- **`top_gainers` / `top_losers`** are registered in **`scan_registry.py`** with FinViz preset signals `ta_topgainers` / `ta_toplosers`. You can add them to **`webhooks.json`** (see **`webhooks.example.json`**) so **`post_scans_elite.py`** and **`post_scans_free.py`** post the same tables as other presets.
-- **`fetch_elite.fetch_scan_with_screener`** returns `(rows, screener_url)`. Top movers need this so Discord embeds link to the correct **v=152** screener URL from the Elite export path, not only the static URL on the scan definition.
-- **`/scans`** uses **`fetch_scan_with_screener`** so “All scans” and single-preset runs match the webhook poster links for Top Gainers/Losers.
-- **Slash `/top_gainers` / `/top_losers`** (top **10**, optional `min_price` / `min_volume`) are unchanged; batch/webhook presets return up to **50** rows and follow the shared cap/sort rules in the **Included Scans** section.
+- **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener; footer notes delayed quotes.
+- **`/heatmap`** — Same **nested treemap** pipeline as **`post_heatmaps_elite.py`** (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
+- **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild + global** sync (test server updates immediately; other servers within ~1 hour). **`SLASH_GUILD_ONLY=1`** = guilds only. **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** only makes sense with guild-only mode (see **§5**).
+- **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
 
 ---
 
@@ -36,6 +36,8 @@ Interactive **slash-command** bot: charts, options, news, quotes, group screens,
 | `/scans` | **All scans** or **one** preset (FinViz Elite CSV + same embed style as Elite webhook poster) |
 | `/top_gainers` | Today's **top 10 gaining** stocks by change %; optional price/volume filters |
 | `/top_losers` | Today's **top 10 losing** stocks by change %; optional price/volume filters |
+| `/earnings` | **Today** or **this week** earnings table (FinViz Elite); time, price, volumes, change % |
+| `/heatmap` | **Nested treemap** by index universe (S&P 500 default); slow full-export pull |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
 | `/groups Sector` | Sector / industry / country / cap aggregates |
@@ -61,8 +63,8 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
-- **`GUILD_ID`** (optional) — your **server ID** if you want **instant** slash command updates while developing (see **§5** below). Leave blank for **global** registration (slower propagation, but commands work in every server without extra config).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
+- **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot **also** syncs **globally** so every other server gets commands (see **§5**). Use **`SLASH_GUILD_ONLY=1`** to register only on listed guilds. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
 
@@ -90,8 +92,9 @@ After this, PradBot appears in the member list (offline until you run `bot.py`).
 
 | Mode | `.env` | Behavior |
 |------|--------|----------|
-| **Global** (default) | No `GUILD_ID` | `bot.py` registers commands for **all servers** the bot is in. Updates can take **up to ~1 hour** to show everywhere. |
-| **Guild (dev)** | `GUILD_ID=<your server id>` | Commands register **only in that one server**, but updates appear **within seconds** after you restart `bot.py`. |
+| **Global only** | No `GUILD_ID` | Commands register for **all servers**; updates can take **up to ~1 hour** everywhere. |
+| **Test + global (default when `GUILD_ID` set)** | `GUILD_ID=<test id(s)>` | **Guild** sync: instant on your test server(s). **Then** **global** sync: all other servers get commands within ~**1 hour**. |
+| **Guild only** | `GUILD_ID=…` and `SLASH_GUILD_ONLY=1` | Commands **only** on listed servers (seconds). No global — other servers **won’t** get updates. |
 
 **How to get your server (guild) ID**
 
@@ -104,15 +107,23 @@ After this, PradBot appears in the member list (offline until you run `bot.py`).
 GUILD_ID=123456789012345678
 ```
 
-(Use your real ID; it is usually 17–19 digits.)
+For **multiple servers** with instant sync, use commas (spaces optional):
 
-5. Restart `bot.py`. The console should log that commands synced **to guild** `…`. Slash commands appear **only in that server** — the ID in `.env` must be the server you are typing in.
+```
+GUILD_ID=111111111111111111,222222222222222222
+```
 
-**Production:** Remove `GUILD_ID` (or comment it out) so commands sync **globally** and every server sees them after propagation (may take up to ~1 hour). **Development:** Keep `GUILD_ID` set to **that server’s** ID for instant updates.
+(Use real IDs; they are usually 17–19 digits.)
 
-**Re-invited the bot or joined a new server and see no commands?** With `GUILD_ID` set, commands exist **only** for that ID. Copy the **new** server’s ID (Developer Mode → right‑click server → Copy Server ID) and update `GUILD_ID`, then restart `bot.py`. Or remove `GUILD_ID` to use global registration so every server gets commands.
+5. Restart `bot.py`. You should see logs for **guild** sync (instant on test) and **global** sync (other servers within ~1 hour). On the **test** server, Discord may briefly show **duplicate** slash entries (guild + global) until global propagation settles — that is normal for dual sync.
 
-**Duplicate `/command` lines (two of each):** Discord can show both **global** and **guild** registrations. After `GUILD_ID` is correct, you can set **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1`** in `.env` and restart once to clear globals (optional; see `.env.example`). Do not enable until `GUILD_ID` matches your dev server, or you can strand servers with no commands.
+**Production without a test guild:** Remove `GUILD_ID` so only **global** sync runs.
+
+**Guild-only (old behavior):** Set **`SLASH_GUILD_ONLY=1`** — commands exist **only** on the guild(s) in `GUILD_ID`; other servers will **not** receive them.
+
+**Re-invited the bot or joined a new server and see no commands?** With **dual** sync (default), wait for **global** propagation (~1 hour) or restart after Discord catches up. With **`SLASH_GUILD_ONLY=1`**, add that server’s ID to `GUILD_ID` or switch to dual/global.
+
+**Duplicate `/command` lines:** With **`SLASH_GUILD_ONLY=1`**, you can set **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1`** to clear globals (see `.env.example`). **Do not** use dedupe when **global** sync is enabled — it would remove commands from other servers.
 
 #### 6) Run PradBot
 
@@ -135,6 +146,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/quote <symbol>` | Quote panel + chart + news |
 | `/top_gainers [min_price] [min_volume]` | Top 10 gainers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/top_losers [min_price] [min_volume]` | Top 10 losers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
+| `/earnings [period]` | **Today** or **Weekly** earnings from FinViz Elite (**v=152**); monospace table: time (incl. BMO/AMC text), price, volume, avg vol, change %; needs `FINVIZ_API_KEY` |
+| `/heatmap [universe]` | Nested performance treemap: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000**; needs `FINVIZ_API_KEY` |
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk>` | EV grade (A+ … D) + Kelly-based position sizing (ephemeral reply) |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
 | `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
@@ -157,6 +170,10 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /top_gainers min_price:5 min_volume:500000
 /top_losers
 /top_losers min_price:10
+/earnings period:Today
+/earnings period:Weekly (this week)
+/heatmap
+/heatmap universe:NASDAQ 100
 /scans scan:all
 /scans scan:jeff_sun_canslim
 /groups group:Sector
@@ -170,6 +187,10 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 **What `/zerodte` shows:** Call/put OI walls, P/C, total OI, top strikes.
 
 **What `/top_gainers` / `/top_losers` show:** A monospace table of the **top 10** stocks by daily change % (gainers sorted highest first, losers most negative first). Columns: ticker, price, change %, volume. Data is pulled from the Elite CSV export using the same column layout as other scans in this repo (`v=141`); the embed **link** opens the **v=152** screener view. Optional **`min_price`** and **`min_volume`** filter before slicing to 10. **`min_volume`** is in **shares** (e.g. `1000000` for one million); the CSV volume column is treated as **thousands** by default and converted to shares for filtering and display. Override with **`FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares`** in `.env` if your export uses full shares. Requires `FINVIZ_API_KEY`.
+
+**What `/earnings` shows:** Pulls the Elite **export.ashx** for **`earningsdate_today`** or **`earningsdate_thisweek`** (sorted by volume). Tables list **Ticker**, **Time** (clock times normalized; session hints like BMO/AMC stay in the FinViz text), **Price**, **Volume**, **AvgVol**, **Chg%**. Volumes are shown compactly (K/M/B) with the same thousands-vs-shares heuristic as movers. **Weekly** mode inserts **`— Apr 10 —`**-style section lines between days (month + day, no year). Title and embed **URL** match the period. Requires `FINVIZ_API_KEY`.
+
+**What `/heatmap` shows:** One or more **PNG** treemap images built from the same **v=152** full-universe export as **`post_heatmaps_elite.py`**, filtered to tickers whose **Index** column matches the chosen benchmark. Embed describes size/color, **as-of** date, and links the FinViz screener. First run can take **1–3 minutes**; increase **`FINVIZ_V152_EXPORT_TIMEOUT_SEC`** if the HTTP fetch times out. Requires `FINVIZ_API_KEY`.
 
 **What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Computes reward (R), risk (L), R:L ratio, EV per share, EV/R, full Kelly fraction, and applies **¼ Kelly** (capped at 50% of daily budget) to suggest a dollar risk for the trade and approximate share count. Grades the setup **A+ through D** based on EV/R. Reply is **ephemeral** (only visible to you). No FinViz key needed. Educational tool, not financial advice.
 
@@ -334,6 +355,7 @@ PradBot-Finviz-To-Discord/
 
   # PradBot + Elite poster helpers
   finviz_chart.py
+  finviz_earnings.py
   finviz_groups.py
   finviz_options.py
   finviz_news.py
@@ -358,7 +380,7 @@ PradBot-Finviz-To-Discord/
 
 **Webhook posters — 429 (free)** — Increase `FINVIZ_FREE_DELAY_SEC` if needed.
 
-**PradBot — slash commands missing** — With **global** sync (no `GUILD_ID`), wait up to ~1 hour after code changes, then restart `bot.py`. If **`GUILD_ID` is set**, commands exist **only on that server** — update the ID if you moved servers. Invite must include **`applications.commands`**. If globals were cleared earlier, comment out **`GUILD_ID`**, restart once to restore global commands, or fix **`GUILD_ID`** and restart.
+**PradBot — slash commands missing** — With **global** or **dual** sync, wait up to ~1 hour on servers that only get **global** registration. With **`SLASH_GUILD_ONLY=1`**, commands exist **only** on guilds in **`GUILD_ID`**. Invite must include **`applications.commands`**. If globals were cleared earlier, restart after fixing `.env`; avoid **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** when using dual/global sync.
 
 **PradBot — `/scans` asks for `FINVIZ_API_KEY`** — Set it in `.env` next to `DISCORD_BOT_TOKEN`.
 
