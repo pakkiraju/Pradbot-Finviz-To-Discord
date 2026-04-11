@@ -14,6 +14,7 @@ This repository ships **three** standalone products that live in the same folder
 
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener; footer notes delayed quotes.
 - **`/heatmap`** — Same **nested treemap** pipeline as **`post_heatmaps_elite.py`** (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
+- **`/inplay`** — FinViz Elite screener: **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**. Embed lists symbol, price, change, volume, and a per-row **`[news](…)`** link (v=152 export for **News URL**; screener link uses **v=151**).
 - **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
 
@@ -27,8 +28,8 @@ Interactive **slash-command** bot: charts, options, news, quotes, group screens,
 
 | Command | What it does |
 |---|---|
-| `/chart AAPL` | **Daily** FinViz candlestick chart |
-| `/chart MSFT Weekly` | **Weekly** chart (timeframe dropdown: Daily, Weekly, Monthly) |
+| `/chart AAPL` | FinViz candlestick chart (**default: Daily**) |
+| `/chart MSFT` | **Timeframe** dropdown: **1m, 3m, 5m, 15m, 30m, 1h**, **Daily**, **Weekly**, **Monthly** |
 | `/gex AAPL` | **GEX** (nearest future expiry or optional date) |
 | `/zerodte AAPL` | **0DTE** OI-style analysis |
 | `/news AAPL` | Latest **5** news links |
@@ -37,6 +38,7 @@ Interactive **slash-command** bot: charts, options, news, quotes, group screens,
 | `/top_gainers` | Today's **top 10 gaining** stocks by change %; optional price/volume filters |
 | `/top_losers` | Today's **top 10 losing** stocks by change %; optional price/volume filters |
 | `/earnings` | **Today** or **this week** earnings table (FinViz Elite); time, price, volumes, change % |
+| `/inplay` | **In play** screen: news + liquidity + rel vol; table with clickable **news** links |
 | `/heatmap` | **Nested treemap** by index universe (S&P 500 default); slow full-export pull |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
@@ -63,7 +65,7 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
@@ -140,7 +142,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 
 | Command | Description |
 |---|---|
-| `/chart <symbol> [timeframe]` | FinViz chart (**timeframe:** Daily, Weekly, Monthly) |
+| `/chart <symbol> [timeframe]` | FinViz chart (**timeframe:** 1m–1h intraday, Daily, Weekly, Monthly) |
 | `/gex <symbol> [expiry]` | GEX / options (optional YYYY-MM-DD) |
 | `/zerodte <symbol>` | 0DTE analysis |
 | `/news <symbol>` | 5 articles with links |
@@ -148,6 +150,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/top_gainers [min_price] [min_volume]` | Top 10 gainers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/top_losers [min_price] [min_volume]` | Top 10 losers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/earnings [period]` | **Today** or **Weekly** earnings from FinViz Elite (**v=152**); monospace table: time (incl. BMO/AMC text), price, volume, avg vol, change %; needs `FINVIZ_API_KEY` |
+| `/inplay` | **In play** — news today/yesterday, price >$1, avg vol >1M, vol >500K, rel vol >1.5; symbol, price, change, vol, **`[news](url)`** per row; needs `FINVIZ_API_KEY` |
 | `/heatmap [universe]` | Nested performance treemap: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000**; needs `FINVIZ_API_KEY` |
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk>` | EV grade (A+ … D) + Kelly-based position sizing (ephemeral reply) |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
@@ -159,6 +162,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 ```
 /chart symbol:AAPL
 /chart symbol:MSFT timeframe:Weekly
+/chart symbol:SPY timeframe:5 minute
+/chart symbol:TSLA timeframe:1 hour
 /gex symbol:AAPL
 /zerodte symbol:SPY
 /news symbol:TSLA
@@ -171,6 +176,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /top_gainers min_price:5 min_volume:500000
 /top_losers
 /top_losers min_price:10
+/inplay
 /earnings period:Today
 /earnings period:Weekly (this week)
 /heatmap
@@ -181,6 +187,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /groups group:Industry preset:Valuation
 ```
 
+**What `/chart` shows:** Downloads a **candlestick PNG** from **`elite.finviz.com/chart.ashx`** (`ty=c`, `ta=1`, `s=l`) with **`p=`** set from the timeframe: **1 / 3 / 5 / 15 / 30 minute** (`i1`–`i30`), **1 hour** (`h`), **Daily / Weekly / Monthly** (`d` / `w` / `m`). Default is **Daily**. Intraday charts need **FinViz Elite** (real-time / extended-hours behavior per FinViz). Requires `FINVIZ_API_KEY`.
+
 **What `/scans` does:** Uses **`fetch_elite.fetch_scan_with_screener`** (rows + FinViz URL for the embed link), **`discord_payload.build_embeds`** — the **same building blocks** as **`post_scans_elite.py`**, but posts into the channel via the bot. **All scans** sends many messages over several minutes.
 
 **What `/gex` shows:** Net GEX, call/put walls, gamma flip, P/C ratio, top strikes (OI fallback if no gamma).
@@ -190,6 +198,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 **What `/top_gainers` / `/top_losers` show:** A monospace table of the **top 10** stocks by daily change % (gainers sorted highest first, losers most negative first). Columns: ticker, price, change %, volume. Data is pulled from the Elite CSV export using the same column layout as other scans in this repo (`v=141`); the embed **link** opens the **v=152** screener view. Optional **`min_price`** and **`min_volume`** filter before slicing to 10. **`min_volume`** is in **shares** (e.g. `1000000` for one million); the CSV volume column is treated as **thousands** by default and converted to shares for filtering and display. Override with **`FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares`** in `.env` if your export uses full shares. Requires `FINVIZ_API_KEY`.
 
 **What `/earnings` shows:** Pulls the Elite **export.ashx** for **`earningsdate_today`** or **`earningsdate_thisweek`** (sorted by volume). Tables list **Ticker**, **Time** (clock times normalized; session hints like BMO/AMC stay in the FinViz text), **Price**, **Volume**, **AvgVol**, **Chg%**. Volumes are shown compactly (K/M/B) with the same thousands-vs-shares heuristic as movers. **Weekly** mode inserts **`— Apr 10 —`**-style section lines between days (month + day, no year). Title and embed **URL** match the period. Requires `FINVIZ_API_KEY`.
+
+**What `/inplay` shows:** Applies the FinViz filters **news today|yesterday**, **sh_avgvol_o1000** (avg vol >1M), **sh_curvol_o500** (>500K current volume), **sh_price_o1** (>$1), **sh_relvol_o1.5** (rel vol >1.5), ordered by **change %** (descending). Fetches a **v=152** Elite export (full column set so **News URL** is present); the embed **title URL** opens the **v=151** screener. Up to **20** rows in a **Markdown table** (Symbol, Price, Change, Vol, News); the News column is **`[news](…)`** (not inside a code block, so links stay clickable). If **News URL** is missing, the link falls back to the symbol’s FinViz quote **news** tab. Requires `FINVIZ_API_KEY`.
 
 **What `/heatmap` shows:** One or more **PNG** treemap images built from the same **v=152** full-universe export as **`post_heatmaps_elite.py`**, filtered to tickers whose **Index** column matches the chosen benchmark. Embed describes size/color, **as-of** date, and links the FinViz screener. First run can take **1–3 minutes**; increase **`FINVIZ_V152_EXPORT_TIMEOUT_SEC`** if the HTTP fetch times out. Requires `FINVIZ_API_KEY`.
 
@@ -357,6 +367,7 @@ PradBot-Finviz-To-Discord/
   # PradBot + Elite poster helpers
   finviz_chart.py
   finviz_earnings.py
+  finviz_inplay.py
   finviz_groups.py
   finviz_options.py
   finviz_news.py

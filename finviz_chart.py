@@ -28,11 +28,44 @@ _HEADERS = {
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")
 
-# Timeframe presets recognised by Finviz chart.ashx
+# Timeframe presets recognised by Finviz elite chart.ashx (`p=` query param).
+# Intraday / hourly: i1, i3, i5, i15, i30, h; longer: d, w, m.
 TIMEFRAMES = {
-    "d": "d",   # daily (default)
-    "w": "w",   # weekly
-    "m": "m",   # monthly
+    "i1": "i1",
+    "i3": "i3",
+    "i5": "i5",
+    "i15": "i15",
+    "i30": "i30",
+    "h": "h",
+    "d": "d",
+    "w": "w",
+    "m": "m",
+}
+
+# Display labels for embed title / footer (keys match TIMEFRAMES / slash choice values).
+CHART_TIMEFRAME_LABELS: dict[str, str] = {
+    "i1": "1 minute",
+    "i3": "3 minute",
+    "i5": "5 minute",
+    "i15": "15 minute",
+    "i30": "30 minute",
+    "h": "1 hour",
+    "d": "Daily",
+    "w": "Weekly",
+    "m": "Monthly",
+}
+
+# Short tags for attachment filenames (no spaces).
+CHART_TIMEFRAME_FILE_TAG: dict[str, str] = {
+    "i1": "1m",
+    "i3": "3m",
+    "i5": "5m",
+    "i15": "15m",
+    "i30": "30m",
+    "h": "1h",
+    "d": "daily",
+    "w": "weekly",
+    "m": "monthly",
 }
 
 
@@ -75,11 +108,11 @@ def build_chart_url(symbol: str, timeframe: str = "d") -> str:
     symbol : str
         Ticker symbol (already validated/uppercased).
     timeframe : str
-        One of 'd' (daily), 'w' (weekly), 'm' (monthly).
+        One of TIMEFRAMES keys (e.g. i5 for 5-minute, d for daily).
     """
     tf = TIMEFRAMES.get(timeframe, "d")
     # ty=c = candle chart, ta=1 = show technical analysis overlays,
-    # p=d/w/m = timeframe, s=l = large size
+    # p=i1/i5/h/d/w/m = timeframe, s=l = large size
     base = "https://elite.finviz.com/chart.ashx"
     url = f"{base}?t={symbol}&ty=c&ta=1&p={tf}&s=l"
 

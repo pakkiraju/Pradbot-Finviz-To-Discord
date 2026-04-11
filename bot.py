@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
 """
 
 import asyncio
@@ -25,7 +25,12 @@ from discord import app_commands
 
 from discord_payload import build_embeds
 from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
-from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
+from finviz_chart import (
+    CHART_TIMEFRAME_FILE_TAG,
+    CHART_TIMEFRAME_LABELS,
+    fetch_chart,
+    validate_symbol,
+)
 from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
 from finviz_news import fetch_news
 from finviz_options import fetch_options
@@ -38,6 +43,7 @@ from finviz_earnings import (
     fetch_earnings_rows,
     format_earnings_embed_description,
 )
+from finviz_inplay import fetch_inplay_rows, format_inplay_description
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -221,13 +227,22 @@ async def on_ready():
 # ---------------------------------------------------------------------------
 
 _TIMEFRAME_CHOICES = [
+    app_commands.Choice(name="1 minute", value="i1"),
+    app_commands.Choice(name="3 minute", value="i3"),
+    app_commands.Choice(name="5 minute", value="i5"),
+    app_commands.Choice(name="15 minute", value="i15"),
+    app_commands.Choice(name="30 minute", value="i30"),
+    app_commands.Choice(name="1 hour", value="h"),
     app_commands.Choice(name="Daily", value="d"),
     app_commands.Choice(name="Weekly", value="w"),
     app_commands.Choice(name="Monthly", value="m"),
 ]
 
 
-@tree.command(name="chart", description="Post a FinViz candlestick chart for a ticker")
+@tree.command(
+    name="chart",
+    description="Post a FinViz candlestick chart (intraday 1m–1h or daily / weekly / monthly)",
+)
 @app_commands.describe(
     symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)",
     timeframe="Chart timeframe",
@@ -240,7 +255,8 @@ async def chart_command(interaction: discord.Interaction, symbol: str, timeframe
         return
 
     tf = timeframe.value if timeframe else "d"
-    tf_label = {"d": "Daily", "w": "Weekly", "m": "Monthly"}[tf]
+    tf_label = CHART_TIMEFRAME_LABELS.get(tf, "Daily")
+    tf_tag = CHART_TIMEFRAME_FILE_TAG.get(tf, "daily")
 
     await interaction.response.defer()
     data = await asyncio.to_thread(fetch_chart, ticker, tf)
@@ -249,11 +265,11 @@ async def chart_command(interaction: discord.Interaction, symbol: str, timeframe
         await interaction.followup.send(f"Could not fetch chart for **{ticker}**. Check the logs for details.")
         return
 
-    filename = f"{ticker}_{tf_label.lower()}.png"
+    filename = f"{ticker}_{tf_tag}.png"
     file = discord.File(io.BytesIO(data), filename=filename)
 
     embed = discord.Embed(
-        title=f"{ticker} — {tf_label} Chart",
+        title=f"{ticker} — {tf_label} chart",
         color=0x2ECC71,
         url=f"https://finviz.com/quote.ashx?t={ticker}",
     )
@@ -739,6 +755,33 @@ async def top_losers_command(
     embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
+
+
+@tree.command(
+    name="inplay",
+    description="Stocks in play: news today/yesterday, liquidity, rel vol >1.5 (FinViz Elite screener)",
+)
+async def inplay_command(interaction: discord.Interaction):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/inplay`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(fetch_inplay_rows)
+    desc = format_inplay_description(rows)
+    embed = discord.Embed(
+        title="In play",
+        description=desc,
+        url=screener_url,
+        color=0x06B6D4,
+    )
+    embed.set_footer(
+        text="FinViz Elite • news today/yesterday • price >$1 • avg vol >1M • vol >500K • rel vol >1.5 • delayed"
+    )
+    await interaction.followup.send(embed=embed)
+    logger.info("inplay: %d rows for %s", len(rows), interaction.user)
 
 
 _EARNINGS_PERIOD_CHOICES = [
