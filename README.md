@@ -22,7 +22,7 @@ This repository ships **three** standalone products that live in the same folder
 
 ## Product 1 — PradBot (`bot.py`)
 
-Interactive **slash-command** bot: charts, options, news, quotes, group screens, channel purge, and on-demand screener tables.
+Interactive **slash-command** bot: charts, options, news, quotes, channel purge, and on-demand screener tables.
 
 ### PradBot — command overview
 
@@ -42,7 +42,6 @@ Interactive **slash-command** bot: charts, options, news, quotes, group screens,
 | `/heatmap` | **Nested treemap** by index universe (S&P 500 default); slow full-export pull |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
-| `/groups Sector` | Sector / industry / country / cap aggregates |
 
 Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`** and **`/evsize`** only need Discord permissions (no FinViz key).
 
@@ -65,7 +64,7 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/groups`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
@@ -155,7 +154,6 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk>` | EV grade (A+ … D) + Kelly-based position sizing (ephemeral reply) |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
 | `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
-| `/groups <group> [preset]` | Groups export (**group** / **preset** dropdowns) |
 
 **Examples:**
 
@@ -183,8 +181,6 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /heatmap universe:NASDAQ 100
 /scans scan:all
 /scans scan:jeff_sun_canslim
-/groups group:Sector
-/groups group:Industry preset:Valuation
 ```
 
 **What `/chart` shows:** Downloads a **candlestick PNG** from **`elite.finviz.com/chart.ashx`** (`ty=c`, `ta=1`, `s=l`) with **`p=`** set from the timeframe: **1 / 3 / 5 / 15 / 30 minute** (`i1`–`i30`), **1 hour** (`h`), **Daily / Weekly / Monthly** (`d` / `w` / `m`). Default is **Daily**. Intraday charts need **FinViz Elite** (real-time / extended-hours behavior per FinViz). Requires `FINVIZ_API_KEY`.
@@ -205,7 +201,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 
 **What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Computes reward (R), risk (L), R:L ratio, EV per share, EV/R, full Kelly fraction, and applies **¼ Kelly** (capped at 50% of daily budget) to suggest a dollar risk for the trade and approximate share count. Grades the setup **A+ through D** based on EV/R. Reply is **ephemeral** (only visible to you). No FinViz key needed. Educational tool, not financial advice.
 
-**What `/news` / `/quote` / `/groups` show:** As before (headlines, combined panel, group tables / CSV when large).
+**What `/news` / `/quote` show:** Headlines and links (news); combined panel with chart, OHLCV, recent days, and headlines (quote).
 
 ---
 
@@ -368,7 +364,6 @@ PradBot-Finviz-To-Discord/
   finviz_chart.py
   finviz_earnings.py
   finviz_inplay.py
-  finviz_groups.py
   finviz_options.py
   finviz_news.py
   finviz_quote.py

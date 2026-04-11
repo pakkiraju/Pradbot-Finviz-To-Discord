@@ -11,7 +11,6 @@ SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unse
 """
 
 import asyncio
-import csv
 import io
 import logging
 import os
@@ -31,7 +30,6 @@ from finviz_chart import (
     fetch_chart,
     validate_symbol,
 )
-from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
 from finviz_news import fetch_news
 from finviz_options import fetch_options
 from finviz_quote import fetch_quote
@@ -892,140 +890,6 @@ async def heatmap_command(
         interaction,
         universe=universe,
     )
-
-
-# ---------------------------------------------------------------------------
-# /groups
-# ---------------------------------------------------------------------------
-
-_GROUPS_INLINE_MAX = 20
-
-_GROUP_CHOICES = [
-    app_commands.Choice(name="Sector", value="sector"),
-    app_commands.Choice(name="Industry", value="industry"),
-    app_commands.Choice(name="Country", value="country"),
-    app_commands.Choice(name="Market Cap", value="cap"),
-]
-
-_PRESET_CHOICES = [
-    app_commands.Choice(name="Custom", value="custom"),
-    app_commands.Choice(name="Overview", value="overview"),
-    app_commands.Choice(name="Valuation", value="valuation"),
-    app_commands.Choice(name="Performance", value="performance"),
-]
-
-
-def _fmt_mcap(raw: str) -> str:
-    try:
-        val = float(raw.replace(",", ""))
-    except (ValueError, TypeError):
-        return raw
-    if val >= 1_000_000:
-        return f"{val / 1_000_000:,.2f}T"
-    if val >= 1_000:
-        return f"{val / 1_000:,.1f}B"
-    return f"{val:,.0f}M"
-
-
-def _build_groups_table(columns: list[str], rows: list[dict[str, str]], limit: int | None = None) -> str:
-    display_rows = rows[:limit] if limit else rows
-    cols = [c for c in columns if c != "No."]
-
-    widths = {c: len(c) for c in cols}
-    formatted: list[dict[str, str]] = []
-    for row in display_rows:
-        fmt = {}
-        for c in cols:
-            val = row.get(c, "")
-            if c == "Market Cap":
-                val = _fmt_mcap(val)
-            elif c in ("Volume", "Average Volume", "Stocks"):
-                try:
-                    val = f"{float(val.replace(',', '')):,.0f}"
-                except (ValueError, TypeError):
-                    pass
-            fmt[c] = val
-            widths[c] = max(widths[c], len(val))
-        formatted.append(fmt)
-
-    header = " | ".join(c.ljust(widths[c]) for c in cols)
-    sep = "-+-".join("-" * widths[c] for c in cols)
-    lines = [header, sep]
-    for fmt in formatted:
-        lines.append(" | ".join(fmt.get(c, "").ljust(widths[c]) for c in cols))
-
-    return "\n".join(lines)
-
-
-def _rebuild_csv(columns: list[str], rows: list[dict[str, str]]) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(columns)
-    for row in rows:
-        writer.writerow(row.get(c, "") for c in columns)
-    return buf.getvalue().encode("utf-8")
-
-
-@tree.command(name="groups", description="Finviz group screener data (sector, industry, country, cap)")
-@app_commands.describe(
-    group="Group type",
-    preset="View preset (columns)",
-)
-@app_commands.choices(group=_GROUP_CHOICES, preset=_PRESET_CHOICES)
-async def groups_command(
-    interaction: discord.Interaction,
-    group: app_commands.Choice[str],
-    preset: app_commands.Choice[str] | None = None,
-):
-    group_val = group.value
-    view_name = preset.value if preset else "custom"
-    view_code = VIEW_PRESETS[view_name]
-
-    await interaction.response.defer()
-    columns, rows = await asyncio.to_thread(fetch_groups, group_val, view_code)
-
-    if not rows:
-        await interaction.followup.send(f"No data returned for **{group_val}** ({view_name}). Check the logs for details.")
-        return
-
-    title = f"{group_val.title()} — {view_name.title()}"
-    embed = discord.Embed(
-        title=title,
-        color=0xF39C12,
-        url=f"https://elite.finviz.com/groups.ashx?g={group_val}&v={view_code}",
-    )
-
-    file = None
-    if len(rows) <= _GROUPS_INLINE_MAX:
-        table = _build_groups_table(columns, rows)
-        if len(table) + 8 <= 4090:
-            embed.description = f"```\n{table}\n```"
-        else:
-            short = _build_groups_table(columns, rows, limit=10)
-            embed.description = f"```\n{short}\n```"
-            csv_bytes = _rebuild_csv(columns, rows)
-            fname = f"groups_{group_val}_{view_name}.csv"
-            file = discord.File(io.BytesIO(csv_bytes), filename=fname)
-            embed.add_field(name="Full data", value=f"See attached `{fname}`", inline=False)
-    else:
-        preview = _build_groups_table(columns, rows, limit=10)
-        if len(preview) + 8 <= 4090:
-            embed.description = f"```\n{preview}\n```"
-        embed.add_field(
-            name="Rows",
-            value=f"{len(rows)} {group_val} groups — full data attached as CSV",
-            inline=False,
-        )
-        csv_bytes = _rebuild_csv(columns, rows)
-        fname = f"groups_{group_val}_{view_name}.csv"
-        file = discord.File(io.BytesIO(csv_bytes), filename=fname)
-
-    embed.set_footer(text="Data from FinViz Elite")
-
-    if file:
-        await interaction.followup.send(embed=embed, file=file)
-    else:
-        await interaction.followup.send(embed=embed)
 
 
 # ---------------------------------------------------------------------------
