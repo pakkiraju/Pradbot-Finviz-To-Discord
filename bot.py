@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
 """
 
 import asyncio
@@ -33,11 +33,13 @@ from finviz_chart import (
 from finviz_news import fetch_news
 from finviz_options import fetch_options
 from finviz_quote import fetch_quote
+from finviz_v152_ticker import fetch_v152_ticker_snapshot
 from gex_compute import compute_gex
 from ev_position_sizing import compute as ev_compute, SizingError, EVResult
 from fetch_v152_universe import FINVIZ_V152_SCREENER_URL
 from finviz_earnings import (
     EarningsPeriod,
+    _fmt_shares_compact,
     fetch_earnings_rows,
     format_earnings_embed_description,
 )
@@ -973,11 +975,32 @@ async def heatmap_command(
 # ---------------------------------------------------------------------------
 
 def _fmt_vol(v: int) -> str:
-    if v >= 1_000_000:
-        return f"{v / 1_000_000:,.2f}M"
-    if v >= 1_000:
-        return f"{v / 1_000:,.1f}K"
-    return f"{v:,}"
+    """Format share/volume counts with K / M / B (aligned with finviz_earnings compact style)."""
+    return _fmt_shares_compact(float(v))
+
+
+def _recent_days_field_value(bars) -> str | None:
+    """Monospace Recent Days block matching /quote; None if too long or insufficient bars."""
+    if len(bars) <= 1:
+        return None
+    lines = ["Date       |  Close   |  Volume"]
+    lines.append("-" * len(lines[0]))
+    for b in bars:
+        lines.append(f"{b.date} | ${b.close:>8,.2f} | {_fmt_vol(b.volume):>8}")
+    table = "\n".join(lines)
+    if len(table) > 1000:
+        return None
+    return f"```\n{table}\n```"
+
+
+def _gap_display_str(snapshot, latest, prev_close: float | None) -> str:
+    if snapshot is not None and (snapshot.gap_raw or "").strip():
+        return snapshot.gap_raw.strip()
+    if prev_close and prev_close != 0:
+        gp = (latest.open - prev_close) / prev_close * 100
+        sign = "+" if gp >= 0 else ""
+        return f"{sign}{gp:.2f}%"
+    return "N/A"
 
 
 @tree.command(name="quote", description="Quick quote panel — chart, OHLCV, change, and latest news")
@@ -1022,14 +1045,9 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
     embed.add_field(name="Volume", value=_fmt_vol(latest.volume), inline=True)
     embed.add_field(name="Date", value=latest.date, inline=True)
 
-    if len(bars) > 1:
-        lines = ["Date       |  Close   |  Volume"]
-        lines.append("-" * len(lines[0]))
-        for b in bars:
-            lines.append(f"{b.date} | ${b.close:>8,.2f} | {_fmt_vol(b.volume):>8}")
-        table = "\n".join(lines)
-        if len(table) <= 1000:
-            embed.add_field(name="Recent Days", value=f"```\n{table}\n```", inline=False)
+    recent = _recent_days_field_value(bars)
+    if recent:
+        embed.add_field(name="Recent Days", value=recent, inline=False)
 
     if articles:
         news_lines = []
@@ -1052,6 +1070,127 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
         await interaction.followup.send(embed=embed)
 
 
+_TOP_OPPS_TIMEFRAMES = ("i1", "i5", "h", "d")
+
+
+@tree.command(
+    name="top_opps",
+    description="1m/5m/1h/d charts + snapshot: OHLCV, PE, float, gap, news, and 5-day history.",
+)
+@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)")
+async def top_opps_command(interaction: discord.Interaction, symbol: str):
+    ticker = validate_symbol(symbol)
+    if ticker is None:
+        await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    results = await asyncio.gather(
+        asyncio.to_thread(fetch_chart, ticker, "i1"),
+        asyncio.to_thread(fetch_chart, ticker, "i5"),
+        asyncio.to_thread(fetch_chart, ticker, "h"),
+        asyncio.to_thread(fetch_chart, ticker, "d"),
+        asyncio.to_thread(fetch_quote, ticker, 5),
+        asyncio.to_thread(fetch_news, ticker, 1),
+        asyncio.to_thread(fetch_v152_ticker_snapshot, ticker),
+    )
+    charts = results[:4]
+    bars = results[4]
+    articles = results[5]
+    snapshot = results[6]
+
+    if not bars:
+        await interaction.followup.send(f"No quote data found for **{ticker}**.")
+        return
+
+    chart_embeds: list[discord.Embed] = []
+    files: list[discord.File] = []
+    missing_labels: list[str] = []
+    for tf, data in zip(_TOP_OPPS_TIMEFRAMES, charts):
+        label = CHART_TIMEFRAME_LABELS.get(tf, tf)
+        tag = CHART_TIMEFRAME_FILE_TAG.get(tf, tf)
+        fn = f"{ticker}_{tag}.png"
+        if data:
+            files.append(discord.File(io.BytesIO(data), filename=fn))
+            emb = discord.Embed(
+                title=ticker,
+                color=0x2ECC71,
+                url=f"https://finviz.com/quote.ashx?t={ticker}",
+            )
+            emb.set_image(url=f"attachment://{fn}")
+            chart_embeds.append(emb)
+        else:
+            missing_labels.append(label)
+
+    if chart_embeds:
+        await interaction.followup.send(embeds=chart_embeds, files=files)
+    else:
+        await interaction.followup.send(
+            f"Could not load charts for **{ticker}**. Check **FINVIZ_API_KEY** and bot logs."
+        )
+
+    latest = bars[0]
+    prev_close = bars[1].close if len(bars) > 1 else None
+
+    if prev_close and prev_close != 0:
+        chg = latest.close - prev_close
+        chg_pct = (chg / prev_close) * 100
+        sign = "+" if chg >= 0 else ""
+        change_str = f"{sign}{chg:,.2f} ({sign}{chg_pct:.2f}%)"
+    else:
+        change_str = "N/A"
+
+    avg_vol = snapshot.avg_vol_display if snapshot else "—"
+    rel_vol = snapshot.rel_vol_display if snapshot else "—"
+    pe = snapshot.pe if snapshot else "—"
+    sh_float = snapshot.shares_float_display if snapshot else "—"
+    short_f = snapshot.short_float_display if snapshot else "—"
+
+    detail = discord.Embed(
+        title=f"{ticker} — snapshot",
+        color=0x1ABC9C,
+        url=f"https://finviz.com/quote.ashx?t={ticker}",
+    )
+    detail.add_field(name="Open", value=f"${latest.open:,.2f}", inline=True)
+    detail.add_field(name="High", value=f"${latest.high:,.2f}", inline=True)
+    detail.add_field(name="Low", value=f"${latest.low:,.2f}", inline=True)
+    detail.add_field(name="Close", value=f"${latest.close:,.2f}", inline=True)
+    detail.add_field(name="Volume", value=_fmt_vol(latest.volume), inline=True)
+    detail.add_field(name="Avg Vol", value=avg_vol, inline=True)
+    detail.add_field(name="Rel Vol", value=rel_vol, inline=True)
+    detail.add_field(name="Change", value=change_str, inline=True)
+    detail.add_field(name="Gap", value=_gap_display_str(snapshot, latest, prev_close), inline=True)
+    detail.add_field(name="P/E", value=pe, inline=True)
+    detail.add_field(name="Share Float", value=sh_float, inline=True)
+    detail.add_field(name="Short Float", value=short_f, inline=True)
+
+    if articles:
+        a = articles[0]
+        src = f" — {a.source}" if a.source else ""
+        news_val = f"[{a.title}]({a.url}){src}"
+        if len(news_val) > 1024:
+            news_val = news_val[:1021] + "..."
+        detail.add_field(
+            name="News",
+            value=news_val,
+            inline=False,
+        )
+    else:
+        detail.add_field(name="News", value="—", inline=False)
+
+    recent = _recent_days_field_value(bars)
+    if recent:
+        detail.add_field(name="Recent Days", value=recent, inline=False)
+
+    foot_parts = ["Data from FinViz Elite"]
+    if missing_labels:
+        foot_parts.append("Missing charts: " + ", ".join(missing_labels))
+    detail.set_footer(text=" • ".join(foot_parts))
+
+    await interaction.followup.send(embed=detail)
+
+
 # ---------------------------------------------------------------------------
 # /evsize  (EV grade + Kelly-based position sizing)
 # ---------------------------------------------------------------------------
@@ -1072,6 +1211,58 @@ _GRADE_COLORS = {
     "B+": 0xFFD600, "B": 0xFFEA00, "B-": 0xFFF176,
     "C": 0xFF9100, "D": 0xFF1744,
 }
+
+_EVSIZE_VISIBILITY_CHOICES = [
+    app_commands.Choice(name="Private — only you (use Post to share)", value="private"),
+    app_commands.Choice(name="Public — everyone sees this reply", value="public"),
+]
+
+
+class EvsizeShareView(discord.ui.View):
+    """Private /evsize reply: button to send the same embed to the channel for everyone."""
+
+    def __init__(self, embed_to_share: discord.Embed, invoker_id: int):
+        super().__init__(timeout=3600.0)
+        self.embed_to_share = embed_to_share
+        self.invoker_id = invoker_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "Only the person who ran `/evsize` can use this button.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Post to channel", style=discord.ButtonStyle.primary)
+    async def post_to_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Sharing works in a server text channel.", ephemeral=True
+            )
+            return
+        ch = interaction.channel
+        if not isinstance(ch, discord.TextChannel):
+            await interaction.response.send_message(
+                "Post to channel only works in a text channel.", ephemeral=True
+            )
+            return
+        me = ch.guild.me
+        if me is None:
+            await interaction.response.send_message("Could not verify bot permissions.", ephemeral=True)
+            return
+        perms = ch.permissions_for(me)
+        if not perms.send_messages or not perms.embed_links:
+            await interaction.response.send_message(
+                "I need **Send Messages** and **Embed Links** in this channel to post.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await ch.send(embed=self.embed_to_share)
+        await interaction.edit_original_response(view=None)
+        await interaction.followup.send("Posted for everyone in this channel.", ephemeral=True)
 
 
 def _pct(v: float) -> str:
@@ -1154,9 +1345,11 @@ def _build_ev_embed(r: EVResult) -> discord.Embed:
     probability="Win probability (0-100%)",
     daily_risk="Max loss budget for the day in USD",
     kelly_fraction="Fraction of full Kelly (default: half)",
+    visibility="Private: only you see the reply (Post button in servers). Public: everyone sees this reply.",
 )
 @app_commands.choices(side=_SIDE_CHOICES)
 @app_commands.choices(kelly_fraction=_KELLY_FRACTION_CHOICES)
+@app_commands.choices(visibility=_EVSIZE_VISIBILITY_CHOICES)
 async def evsize_command(
     interaction: discord.Interaction,
     side: app_commands.Choice[str],
@@ -1166,6 +1359,7 @@ async def evsize_command(
     probability: float,
     daily_risk: float,
     kelly_fraction: app_commands.Choice[str] | None = None,
+    visibility: app_commands.Choice[str] | None = None,
 ):
     try:
         fk = float(kelly_fraction.value) if kelly_fraction is not None else 0.5
@@ -1183,7 +1377,15 @@ async def evsize_command(
         return
 
     embed = _build_ev_embed(result)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    vis = visibility.value if visibility is not None else "private"
+
+    if vis == "public":
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+    else:
+        view = None
+        if interaction.guild is not None:
+            view = EvsizeShareView(embed.copy(), interaction.user.id)
+        await interaction.response.send_message(embed=embed, ephemeral=True, view=view)
     logger.info(
         "evsize %s entry=%.2f target=%.2f stop=%.2f prob=%.1f risk=%.2f kelly_frac=%s -> grade=%s $%.2f by %s",
         result.side, entry, target, stop, probability, daily_risk,
