@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
 """
 
 import asyncio
@@ -41,7 +41,11 @@ from finviz_earnings import (
     fetch_earnings_rows,
     format_earnings_embed_description,
 )
-from finviz_inplay import fetch_inplay_rows, format_inplay_description
+from finviz_inplay import (
+    fetch_inplay_rows,
+    format_inplay_description,
+    format_inplay_smallcap_description,
+)
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -478,6 +482,54 @@ async def news_command(interaction: discord.Interaction, symbol: str):
 
 
 # ---------------------------------------------------------------------------
+# /econ_calendar (TradingView Economic Calendar)
+# ---------------------------------------------------------------------------
+
+TRADINGVIEW_ECON_CALENDAR_URL = "https://www.tradingview.com/economic-calendar/"
+
+# Defaults from TradingView embed-widget-events snippet (informational only).
+ECON_CALENDAR_WIDGET_DEFAULTS = {
+    "colorTheme": "dark",
+    "isTransparent": False,
+    "locale": "en",
+    "countryFilter": "us,ca",
+    "importanceFilter": "-1,0,1",
+    "width": 400,
+    "height": 550,
+}
+
+
+class EconomicCalendarView(discord.ui.View):
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="Open Economic Calendar", url=url))
+
+
+@tree.command(
+    name="econ_calendar",
+    description="TradingView Economic Calendar (Open Economic Calendar button)",
+)
+async def econ_calendar_command(interaction: discord.Interaction):
+    defaults = ECON_CALENDAR_WIDGET_DEFAULTS
+    embed = discord.Embed(
+        title="Economic Calendar",
+        url=TRADINGVIEW_ECON_CALENDAR_URL,
+        color=0x2962FF,
+        description=(
+            f"**{defaults['colorTheme']}** theme · locale `{defaults['locale']}` · "
+            f"countries **{defaults['countryFilter']}** · importance `{defaults['importanceFilter']}` · "
+            f"~{defaults['width']}×{defaults['height']}"
+        ),
+    )
+    embed.set_footer(text="Economic Calendar by TradingView")
+    await interaction.response.send_message(
+        embed=embed,
+        view=EconomicCalendarView(TRADINGVIEW_ECON_CALENDAR_URL),
+    )
+    logger.info("econ_calendar for %s", interaction.user)
+
+
+# ---------------------------------------------------------------------------
 # /purge
 # ---------------------------------------------------------------------------
 
@@ -755,31 +807,55 @@ async def top_losers_command(
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
 
 
+_INPLAY_SCANNER_CHOICES = [
+    app_commands.Choice(name="Default", value="default"),
+    app_commands.Choice(name="Small caps", value="smallcaps"),
+]
+
+
 @tree.command(
     name="inplay",
-    description="Stocks in play: news today/yesterday, liquidity, rel vol >1.5 (FinViz Elite screener)",
+    description="Stocks in play: news + liquidity (default) or small-cap liquidity screen (FinViz Elite)",
 )
-async def inplay_command(interaction: discord.Interaction):
+@app_commands.describe(
+    scanner="Default: news + liquidity screen. Small caps: cap $5M–$2B, vol + rel vol; v=152 screener + per-row news links.",
+)
+@app_commands.choices(scanner=_INPLAY_SCANNER_CHOICES)
+async def inplay_command(
+    interaction: discord.Interaction,
+    scanner: str = "default",
+):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
             "Set **FINVIZ_API_KEY** in `.env` to use `/inplay`.", ephemeral=True
         )
         return
 
+    mode = "smallcaps" if scanner == "smallcaps" else "default"
+
     await interaction.response.defer()
-    rows, screener_url = await asyncio.to_thread(fetch_inplay_rows)
-    desc = format_inplay_description(rows)
+    rows, screener_url = await asyncio.to_thread(fetch_inplay_rows, mode=mode)
+    if mode == "smallcaps":
+        desc = format_inplay_smallcap_description(rows)
+        title = "In play — Small caps"
+        footer = (
+            "FinViz Elite • v=152 screener • cap $5M–$2B • cur vol >1M • rel vol >1.5 • delayed"
+        )
+    else:
+        desc = format_inplay_description(rows)
+        title = "In play"
+        footer = (
+            "FinViz Elite • news today/yesterday • price >$1 • avg vol >1M • vol >500K • rel vol >1.5 • delayed"
+        )
     embed = discord.Embed(
-        title="In play",
+        title=title,
         description=desc,
         url=screener_url,
         color=0x06B6D4,
     )
-    embed.set_footer(
-        text="FinViz Elite • news today/yesterday • price >$1 • avg vol >1M • vol >500K • rel vol >1.5 • delayed"
-    )
+    embed.set_footer(text=footer)
     await interaction.followup.send(embed=embed)
-    logger.info("inplay: %d rows for %s", len(rows), interaction.user)
+    logger.info("inplay (%s): %d rows for %s", mode, len(rows), interaction.user)
 
 
 _EARNINGS_PERIOD_CHOICES = [

@@ -11,9 +11,10 @@ This repository ships **two** standalone products that live in the same folder a
 
 ### Recent changes (at a glance)
 
+- **`/econ_calendar`** — TradingView **Economic Calendar**: embed + **Open Economic Calendar** button. No FinViz key.
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener; footer notes delayed quotes.
 - **`/heatmap`** — **Nested treemap** from FinViz **v=152** full export (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
-- **`/inplay`** — FinViz Elite screener: **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**. Embed lists symbol, price, change, volume, and a per-row **`[news](…)`** link (v=152 export for **News URL**; screener link uses **v=151**).
+- **`/inplay`** — FinViz Elite **In play** screener (default): **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**; table with **`[news](…)`** per row (**v=152** export; screener **v=151**). Optional **`scanner: Small caps`**: market cap **$5M–$2B**, current vol **>1M**, rel vol **>1.5**; embed links the **v=152** screener (same columns as export); wider table with country, market cap, **float** (K/M/B), short float, and **`[news](…)`** per row from the **News URL** column (fallback: quote news tab).
 - **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
 - **`/markets` removed** — The experimental multi-futures snapshot slash command and **`finviz_markets.py`** were dropped; **`finviz_chart`** no longer exposes futures-only helpers. Use **`/chart`** per symbol as needed.
@@ -32,17 +33,18 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/gex AAPL` | **GEX** (nearest future expiry or optional date) |
 | `/zerodte AAPL` | **0DTE** OI-style analysis |
 | `/news AAPL` | Latest **5** news links |
+| `/econ_calendar` | **TradingView** Economic Calendar — embed + **Open Economic Calendar** button |
 | `/quote AAPL` | Chart + OHLCV + change + recent days + headlines |
 | `/scans` | **All scans** or **one** preset (FinViz Elite CSV + same embed style as Elite webhook poster) |
 | `/top_gainers` | Today's **top 10 gaining** stocks by change %; optional price/volume filters |
 | `/top_losers` | Today's **top 10 losing** stocks by change %; optional price/volume filters |
 | `/earnings` | **Today** or **this week** earnings table (FinViz Elite); time, price, volumes, change % |
-| `/inplay` | **In play** screen: news + liquidity + rel vol; table with clickable **news** links |
+| `/inplay` | **In play** (default): news + liquidity + rel vol; **`[news](url)`** per row. Optional **Small caps**: cap $5M–$2B, vol + rel vol; **v=152** screener link; extra float/cap columns + **`[news](url)`** |
 | `/heatmap` | **Nested treemap** by index universe (S&P 500 default); slow full-export pull |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
 
-Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`** and **`/evsize`** only need Discord permissions (no FinViz key).
+Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`**, **`/evsize`**, and **`/econ_calendar`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
 
 ### PradBot — setup
 
@@ -63,7 +65,7 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`** and **`/evsize`** (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`**, **`/evsize`**, and **`/econ_calendar`** (the bot still needs the Discord token to start).
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
@@ -144,11 +146,12 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/gex <symbol> [expiry]` | GEX / options (optional YYYY-MM-DD) |
 | `/zerodte <symbol>` | 0DTE analysis |
 | `/news <symbol>` | 5 articles with links |
+| `/econ_calendar` | TradingView **Economic Calendar**: embed + **Open Economic Calendar** button; no `FINVIZ_API_KEY` |
 | `/quote <symbol>` | Quote panel + chart + news |
 | `/top_gainers [min_price] [min_volume]` | Top 10 gainers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/top_losers [min_price] [min_volume]` | Top 10 losers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/earnings [period]` | **Today** or **Weekly** earnings from FinViz Elite (**v=152**); monospace table: time (incl. BMO/AMC text), price, volume, avg vol, change %; needs `FINVIZ_API_KEY` |
-| `/inplay` | **In play** — news today/yesterday, price >$1, avg vol >1M, vol >500K, rel vol >1.5; symbol, price, change, vol, **`[news](url)`** per row; needs `FINVIZ_API_KEY` |
+| `/inplay [scanner]` | **In play** — **Default:** news today/yesterday, price >$1, avg vol >1M, vol >500K, rel vol >1.5; **`[news](url)`** per row; screener **v=151**. **Small caps:** cap $5M–$2B, cur vol >1M, rel vol >1.5; **v=152** screener; country, MCap, float (K/M/B), short %, **`[news](url)`**; needs `FINVIZ_API_KEY` |
 | `/heatmap [universe]` | Nested performance treemap: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000**; needs `FINVIZ_API_KEY` |
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk> [kelly_fraction]` | EV grade (A+ … D) + Kelly-based sizing: **¼ / ½ / full** Kelly of full Kelly (default **½**); ephemeral reply |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
@@ -164,6 +167,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /gex symbol:AAPL
 /zerodte symbol:SPY
 /news symbol:TSLA
+/econ_calendar
 /quote symbol:MSFT
 /purge amount:10
 /purge amount:all
@@ -175,6 +179,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /top_losers
 /top_losers min_price:10
 /inplay
+/inplay scanner:Small caps
 /earnings period:Today
 /earnings period:Weekly (this week)
 /heatmap
@@ -195,11 +200,13 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 
 **What `/earnings` shows:** Pulls the Elite **export.ashx** for **`earningsdate_today`** or **`earningsdate_thisweek`** (sorted by volume). Tables list **Ticker**, **Time** (clock times normalized; session hints like BMO/AMC stay in the FinViz text), **Price**, **Volume**, **AvgVol**, **Chg%**. Volumes are shown compactly (K/M/B) with the same thousands-vs-shares heuristic as movers. **Weekly** mode inserts **`— Apr 10 —`**-style section lines between days (month + day, no year). Title and embed **URL** match the period. Requires `FINVIZ_API_KEY`.
 
-**What `/inplay` shows:** Applies the FinViz filters **news today|yesterday**, **sh_avgvol_o1000** (avg vol >1M), **sh_curvol_o500** (>500K current volume), **sh_price_o1** (>$1), **sh_relvol_o1.5** (rel vol >1.5), ordered by **change %** (descending). Fetches a **v=152** Elite export (full column set so **News URL** is present); the embed **title URL** opens the **v=151** screener. Up to **20** rows in a **Markdown table** (Symbol, Price, Change, Vol, News); the News column is **`[news](…)`** (not inside a code block, so links stay clickable). If **News URL** is missing, the link falls back to the symbol’s FinViz quote **news** tab. Requires `FINVIZ_API_KEY`.
+**What `/inplay` shows:** **Default** (`scanner` omitted or **Default**): FinViz filters **news today|yesterday**, **sh_avgvol_o1000** (avg vol >1M), **sh_curvol_o500** (>500K current volume), **sh_price_o1** (>$1), **sh_relvol_o1.5** (rel vol >1.5), ordered by **change %** (descending). **v=152** Elite export (full columns so **News URL** is present); embed **URL** is the **v=151** screener. Up to **20** rows (Symbol, Price, Change, Vol, News) with **`[news](…)`** links; missing **News URL** falls back to the quote **news** tab. **Small caps** (`scanner: Small caps`): **`cap_0.005to2,sh_curvol_o1000,sh_relvol_o1.5`** — market cap **$5M–$2B**, current vol **>1M**, rel vol **>1.5**. Same **v=152** Elite export; embed **title URL** opens the **v=152** screener (with the same custom column set as the export). Table: **Country**, **MCap**, **Float** (K/M/B), **Shrt%**, and **`[news](…)`** using **News URL** when present (else quote **news** tab). Requires `FINVIZ_API_KEY`.
 
 **What `/heatmap` shows:** One or more **PNG** treemap images built from a **v=152** full-universe export, filtered to tickers whose **Index** column matches the chosen benchmark. Embed describes size/color, **as-of** date, and links the FinViz screener. First run can take **1–3 minutes**; increase **`FINVIZ_V152_EXPORT_TIMEOUT_SEC`** if the HTTP fetch times out. Requires `FINVIZ_API_KEY`.
 
 **What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Optional **`kelly_fraction`:** **Quarter**, **Half** (default), or **Full** Kelly — i.e. that fraction of the **full Kelly** share of the daily budget, then **capped at 50%** of the daily budget per trade. Computes R, L, R:L, EV/share, EV/R, and suggested dollar risk and share count. Grades **A+ through D** from EV/R. Reply is **ephemeral**. No FinViz key needed. Educational tool, not financial advice.
+
+**What `/econ_calendar` shows:** A **rich embed** for [TradingView Economic Calendar](https://www.tradingview.com/economic-calendar/) with an **Open Economic Calendar** button and a short summary of the default preset (theme, locale, countries, importance, size). No `FINVIZ_API_KEY`.
 
 **What `/news` / `/quote` show:** Headlines and links (news); combined panel with chart, OHLCV, recent days, and headlines (quote).
 
