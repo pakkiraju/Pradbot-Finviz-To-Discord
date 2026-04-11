@@ -2,3 +2,7 @@ requests>=2.31
 python-dotenv>=1.0
 finviz>=2.0.0
 discord.py>=2.3
+pandas>=2.0
+matplotlib>=3.8
+numpy>=1.24
+squarify>=0.4.0

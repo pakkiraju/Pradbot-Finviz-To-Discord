@@ -2,13 +2,15 @@
 
 Run with:  python bot.py
 Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
-Slash commands sync globally when the bot starts (new registrations may take up to ~1 hour to appear everywhere).
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py).
+Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only (no global) so test
+servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
+SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
+
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only; same pipeline as post_heatmaps_elite.py). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (news + liquidity screen; v=152 export for News URL). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=).
 """
 
 import asyncio
-import csv
 import io
 import logging
 import os
@@ -21,13 +23,26 @@ import discord
 from discord import app_commands
 
 from discord_payload import build_embeds
-from fetch_elite import fetch_scan
-from finviz_chart import fetch_chart, validate_symbol, TIMEFRAMES
-from finviz_groups import fetch_groups, VALID_GROUPS, VIEW_PRESETS
+from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
+from finviz_chart import (
+    CHART_TIMEFRAME_FILE_TAG,
+    CHART_TIMEFRAME_LABELS,
+    fetch_chart,
+    validate_symbol,
+)
 from finviz_news import fetch_news
 from finviz_options import fetch_options
 from finviz_quote import fetch_quote
 from gex_compute import compute_gex
+from ev_position_sizing import compute as ev_compute, SizingError, EVResult
+from fetch_v152_universe import FINVIZ_V152_SCREENER_URL
+from finviz_earnings import (
+    EarningsPeriod,
+    fetch_earnings_rows,
+    format_earnings_embed_description,
+)
+from finviz_inplay import fetch_inplay_rows, format_inplay_description
+from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
 # ---------------------------------------------------------------------------
@@ -83,8 +98,8 @@ _SCANS_ALL_DELAY_SEC = 1.5
 
 async def _followup_scan_embeds(interaction: discord.Interaction, scan_def) -> tuple[int, int]:
     """Fetch one scan and post embed(s). Returns (row_count, embed_count)."""
-    rows = await asyncio.to_thread(fetch_scan, scan_def)
-    embed_dicts = build_embeds(scan_def.title, rows, screener_url=scan_def.screener_url)
+    rows, screener_url = await asyncio.to_thread(fetch_scan_with_screener, scan_def)
+    embed_dicts = build_embeds(scan_def.title, rows, screener_url=screener_url)
     embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
     await interaction.followup.send(embed=embeds[0])
     for emb in embeds[1:]:
@@ -116,10 +131,92 @@ def _webhook_embed_dict_to_discord(em: dict) -> discord.Embed:
     return embed
 
 
+def _parse_guild_ids(raw: str) -> list[int]:
+    """Parse GUILD_ID: one ID or comma-separated IDs (whitespace allowed)."""
+    out: list[int] = []
+    for part in raw.replace(",", " ").split():
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            logger.warning("GUILD_ID skip invalid token %r (digits only)", part)
+    return out
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 @bot.event
 async def on_ready():
-    await tree.sync()
-    logger.info("Synced slash commands globally (new commands may take up to ~1 hour to propagate)")
+    guild_id_raw = os.environ.get("GUILD_ID", "").strip()
+    guild_only = _env_truthy("SLASH_GUILD_ONLY")
+    sync_global_also = _env_truthy("SLASH_SYNC_GLOBAL_ALSO")
+    # Dual sync only when explicitly requested; avoids duplicate /command rows on test guilds.
+    should_sync_global = sync_global_also and not guild_only
+
+    if guild_id_raw:
+        guild_ids = _parse_guild_ids(guild_id_raw)
+        if not guild_ids:
+            logger.error(
+                "GUILD_ID has no valid Discord server IDs, got %r — using global sync",
+                guild_id_raw,
+            )
+            await tree.sync()
+            logger.info("Synced slash commands globally (invalid GUILD_ID)")
+        else:
+            for guild_id in guild_ids:
+                guild = discord.Object(id=guild_id)
+                tree.copy_global_to(guild=guild)
+                await tree.sync(guild=guild)
+            logger.info(
+                "Synced slash commands to guild(s) %s (instant)",
+                guild_ids,
+            )
+
+            if should_sync_global:
+                await tree.sync()
+                logger.info(
+                    "Also synced slash commands globally (SLASH_SYNC_GLOBAL_ALSO=1) — other servers "
+                    "update within ~1 hour; this test guild may show duplicate entries until Discord dedupes"
+                )
+            else:
+                if guild_only:
+                    logger.info(
+                        "SLASH_GUILD_ONLY=1 — no global sync; only listed guild(s) have commands"
+                    )
+                else:
+                    logger.info(
+                        "Slash commands on guild(s) only (no global sync). "
+                        "Set SLASH_SYNC_GLOBAL_ALSO=1 to register globally for other servers. "
+                        "If commands still appear twice, restart once with SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1 "
+                        "to remove stale global registrations."
+                    )
+
+            # Optional clear of global commands when we are not syncing globals (dedupe after old dual-sync runs).
+            if should_sync_global and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
+                logger.warning(
+                    "SLASH_CLEAR_GLOBAL_FOR_DEDUPE ignored while global sync is enabled "
+                    "(incompatible — would remove commands from servers that only have globals)"
+                )
+            elif not should_sync_global and _env_truthy("SLASH_CLEAR_GLOBAL_FOR_DEDUPE"):
+                app_id = bot.application_id
+                if app_id is not None:
+                    try:
+                        await bot.http.bulk_upsert_global_commands(app_id, [])
+                        logger.info(
+                            "Cleared global slash commands (SLASH_CLEAR_GLOBAL_FOR_DEDUPE=1)"
+                        )
+                    except discord.HTTPException as e:
+                        logger.warning("Could not clear global slash commands: %s", e)
+    else:
+        await tree.sync()
+        logger.info(
+            "Synced slash commands globally (set GUILD_ID for instant guild sync; "
+            "add SLASH_SYNC_GLOBAL_ALSO=1 with GUILD_ID for dual sync)"
+        )
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
@@ -128,13 +225,22 @@ async def on_ready():
 # ---------------------------------------------------------------------------
 
 _TIMEFRAME_CHOICES = [
+    app_commands.Choice(name="1 minute", value="i1"),
+    app_commands.Choice(name="3 minute", value="i3"),
+    app_commands.Choice(name="5 minute", value="i5"),
+    app_commands.Choice(name="15 minute", value="i15"),
+    app_commands.Choice(name="30 minute", value="i30"),
+    app_commands.Choice(name="1 hour", value="h"),
     app_commands.Choice(name="Daily", value="d"),
     app_commands.Choice(name="Weekly", value="w"),
     app_commands.Choice(name="Monthly", value="m"),
 ]
 
 
-@tree.command(name="chart", description="Post a FinViz candlestick chart for a ticker")
+@tree.command(
+    name="chart",
+    description="Post a FinViz candlestick chart (intraday 1m–1h or daily / weekly / monthly)",
+)
 @app_commands.describe(
     symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)",
     timeframe="Chart timeframe",
@@ -147,7 +253,8 @@ async def chart_command(interaction: discord.Interaction, symbol: str, timeframe
         return
 
     tf = timeframe.value if timeframe else "d"
-    tf_label = {"d": "Daily", "w": "Weekly", "m": "Monthly"}[tf]
+    tf_label = CHART_TIMEFRAME_LABELS.get(tf, "Daily")
+    tf_tag = CHART_TIMEFRAME_FILE_TAG.get(tf, "daily")
 
     await interaction.response.defer()
     data = await asyncio.to_thread(fetch_chart, ticker, tf)
@@ -156,11 +263,11 @@ async def chart_command(interaction: discord.Interaction, symbol: str, timeframe
         await interaction.followup.send(f"Could not fetch chart for **{ticker}**. Check the logs for details.")
         return
 
-    filename = f"{ticker}_{tf_label.lower()}.png"
+    filename = f"{ticker}_{tf_tag}.png"
     file = discord.File(io.BytesIO(data), filename=filename)
 
     embed = discord.Embed(
-        title=f"{ticker} — {tf_label} Chart",
+        title=f"{ticker} — {tf_label} chart",
         color=0x2ECC71,
         url=f"https://finviz.com/quote.ashx?t={ticker}",
     )
@@ -542,137 +649,247 @@ async def scans_command(interaction: discord.Interaction, scan: app_commands.Cho
 
 
 # ---------------------------------------------------------------------------
-# /groups
+# /top_gainers  /top_losers
 # ---------------------------------------------------------------------------
 
-_GROUPS_INLINE_MAX = 20
 
-_GROUP_CHOICES = [
-    app_commands.Choice(name="Sector", value="sector"),
-    app_commands.Choice(name="Industry", value="industry"),
-    app_commands.Choice(name="Country", value="country"),
-    app_commands.Choice(name="Market Cap", value="cap"),
-]
-
-_PRESET_CHOICES = [
-    app_commands.Choice(name="Custom", value="custom"),
-    app_commands.Choice(name="Overview", value="overview"),
-    app_commands.Choice(name="Valuation", value="valuation"),
-    app_commands.Choice(name="Performance", value="performance"),
-]
-
-
-def _fmt_mcap(raw: str) -> str:
+def _fmt_movers_vol(val) -> str:
+    n = None
+    raw = str(val).strip().replace(",", "")
     try:
-        val = float(raw.replace(",", ""))
+        n = float(raw)
     except (ValueError, TypeError):
-        return raw
-    if val >= 1_000_000:
-        return f"{val / 1_000_000:,.2f}T"
-    if val >= 1_000:
-        return f"{val / 1_000:,.1f}B"
-    return f"{val:,.0f}M"
+        return str(val)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:,.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:,.0f}K"
+    return f"{n:,.0f}"
 
 
-def _build_groups_table(columns: list[str], rows: list[dict[str, str]], limit: int | None = None) -> str:
-    display_rows = rows[:limit] if limit else rows
-    cols = [c for c in columns if c != "No."]
+def _build_movers_embed(
+    kind: str,
+    rows: list[dict],
+    screener_url: str,
+    min_price: float | None,
+    min_volume: float | None,
+) -> discord.Embed:
+    label = "Gainers" if kind == "gainers" else "Losers"
+    color = 0x00C853 if kind == "gainers" else 0xFF1744
+    title = f"Top {len(rows)} {label}"
 
-    widths = {c: len(c) for c in cols}
-    formatted: list[dict[str, str]] = []
-    for row in display_rows:
-        fmt = {}
-        for c in cols:
-            val = row.get(c, "")
-            if c == "Market Cap":
-                val = _fmt_mcap(val)
-            elif c in ("Volume", "Average Volume", "Stocks"):
-                try:
-                    val = f"{float(val.replace(',', '')):,.0f}"
-                except (ValueError, TypeError):
-                    pass
-            fmt[c] = val
-            widths[c] = max(widths[c], len(val))
-        formatted.append(fmt)
-
-    header = " | ".join(c.ljust(widths[c]) for c in cols)
-    sep = "-+-".join("-" * widths[c] for c in cols)
-    lines = [header, sep]
-    for fmt in formatted:
-        lines.append(" | ".join(fmt.get(c, "").ljust(widths[c]) for c in cols))
-
-    return "\n".join(lines)
-
-
-def _rebuild_csv(columns: list[str], rows: list[dict[str, str]]) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(columns)
-    for row in rows:
-        writer.writerow(row.get(c, "") for c in columns)
-    return buf.getvalue().encode("utf-8")
-
-
-@tree.command(name="groups", description="Finviz group screener data (sector, industry, country, cap)")
-@app_commands.describe(
-    group="Group type",
-    preset="View preset (columns)",
-)
-@app_commands.choices(group=_GROUP_CHOICES, preset=_PRESET_CHOICES)
-async def groups_command(
-    interaction: discord.Interaction,
-    group: app_commands.Choice[str],
-    preset: app_commands.Choice[str] | None = None,
-):
-    group_val = group.value
-    view_name = preset.value if preset else "custom"
-    view_code = VIEW_PRESETS[view_name]
-
-    await interaction.response.defer()
-    columns, rows = await asyncio.to_thread(fetch_groups, group_val, view_code)
+    embed = discord.Embed(title=title, color=color, url=screener_url)
 
     if not rows:
-        await interaction.followup.send(f"No data returned for **{group_val}** ({view_name}). Check the logs for details.")
+        embed.description = f"*No {label.lower()} matched the filters.*"
+    else:
+        header = f"{'Ticker':<6} {'Price':>9} {'Chg%':>8} {'Volume':>9}"
+        lines = [header, "-" * len(header)]
+        for r in rows:
+            tk = (r.get("ticker") or "")[:6].ljust(6)
+            pr = str(r.get("price") or "").rjust(9)
+            ch = str(r.get("change") or "").rjust(8)
+            vo = _fmt_movers_vol(r.get("volume") or "").rjust(9)
+            lines.append(f"{tk} {pr} {ch} {vo}")
+        embed.description = f"```\n{chr(10).join(lines)}\n```"
+
+    filters = []
+    if min_price is not None:
+        filters.append(f"price >= ${min_price:,.2f}")
+    if min_volume is not None:
+        filters.append(f"volume >= {_fmt_movers_vol(min_volume)}")
+    footer = "Data from FinViz Elite"
+    if filters:
+        footer += "  |  Filters: " + ", ".join(filters)
+    embed.set_footer(text=footer)
+    return embed
+
+
+@tree.command(name="top_gainers", description="Top 10 gaining stocks today (sorted by change %)")
+@app_commands.describe(
+    min_price="Only show stocks at or above this price (optional)",
+    min_volume="Min volume in shares today, e.g. 1000000 for 1M (optional)",
+)
+async def top_gainers_command(
+    interaction: discord.Interaction,
+    min_price: float | None = None,
+    min_volume: float | None = None,
+):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/top_gainers`.", ephemeral=True
+        )
         return
 
-    title = f"{group_val.title()} — {view_name.title()}"
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(
+        fetch_top_movers, "gainers", min_price=min_price, min_volume=min_volume
+    )
+    embed = _build_movers_embed("gainers", rows, screener_url, min_price, min_volume)
+    await interaction.followup.send(embed=embed)
+    logger.info("top_gainers: %d rows for %s", len(rows), interaction.user)
+
+
+@tree.command(name="top_losers", description="Top 10 losing stocks today (sorted by change %)")
+@app_commands.describe(
+    min_price="Only show stocks at or above this price (optional)",
+    min_volume="Min volume in shares today, e.g. 1000000 for 1M (optional)",
+)
+async def top_losers_command(
+    interaction: discord.Interaction,
+    min_price: float | None = None,
+    min_volume: float | None = None,
+):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/top_losers`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(
+        fetch_top_movers, "losers", min_price=min_price, min_volume=min_volume
+    )
+    embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
+    await interaction.followup.send(embed=embed)
+    logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
+
+
+@tree.command(
+    name="inplay",
+    description="Stocks in play: news today/yesterday, liquidity, rel vol >1.5 (FinViz Elite screener)",
+)
+async def inplay_command(interaction: discord.Interaction):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/inplay`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(fetch_inplay_rows)
+    desc = format_inplay_description(rows)
+    embed = discord.Embed(
+        title="In play",
+        description=desc,
+        url=screener_url,
+        color=0x06B6D4,
+    )
+    embed.set_footer(
+        text="FinViz Elite • news today/yesterday • price >$1 • avg vol >1M • vol >500K • rel vol >1.5 • delayed"
+    )
+    await interaction.followup.send(embed=embed)
+    logger.info("inplay: %d rows for %s", len(rows), interaction.user)
+
+
+_EARNINGS_PERIOD_CHOICES = [
+    app_commands.Choice(name="Today", value="today"),
+    app_commands.Choice(name="Weekly (this week)", value="weekly"),
+]
+
+
+@tree.command(
+    name="earnings",
+    description="Stocks with earnings today or this week (time, price, volume, avg vol, change)",
+)
+@app_commands.describe(period="Earnings date filter")
+@app_commands.choices(period=_EARNINGS_PERIOD_CHOICES)
+async def earnings_command(
+    interaction: discord.Interaction,
+    period: str = "today",
+):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/earnings`.", ephemeral=True
+        )
+        return
+
+    p: EarningsPeriod = "today" if period == "today" else "weekly"
+    await interaction.response.defer()
+    rows, screener_url = await asyncio.to_thread(fetch_earnings_rows, p)
+    desc = format_earnings_embed_description(rows, period=p)
+    title = "Earnings — today" if p == "today" else "Earnings — this week"
     embed = discord.Embed(
         title=title,
-        color=0xF39C12,
-        url=f"https://elite.finviz.com/groups.ashx?g={group_val}&v={view_code}",
+        description=desc,
+        url=screener_url,
+        color=0x06B6D4,
     )
+    embed.set_footer(text="FinViz Elite • quotes delayed")
+    await interaction.followup.send(embed=embed)
+    logger.info("earnings %s: %d rows for %s", p, len(rows), interaction.user)
 
-    file = None
-    if len(rows) <= _GROUPS_INLINE_MAX:
-        table = _build_groups_table(columns, rows)
-        if len(table) + 8 <= 4090:
-            embed.description = f"```\n{table}\n```"
-        else:
-            short = _build_groups_table(columns, rows, limit=10)
-            embed.description = f"```\n{short}\n```"
-            csv_bytes = _rebuild_csv(columns, rows)
-            fname = f"groups_{group_val}_{view_name}.csv"
-            file = discord.File(io.BytesIO(csv_bytes), filename=fname)
-            embed.add_field(name="Full data", value=f"See attached `{fname}`", inline=False)
-    else:
-        preview = _build_groups_table(columns, rows, limit=10)
-        if len(preview) + 8 <= 4090:
-            embed.description = f"```\n{preview}\n```"
-        embed.add_field(
-            name="Rows",
-            value=f"{len(rows)} {group_val} groups — full data attached as CSV",
-            inline=False,
+
+_HEATMAP_UNIVERSE_CHOICES = [
+    app_commands.Choice(name="S&P 500 (default)", value="sp500"),
+    app_commands.Choice(name="NASDAQ 100", value="ndx100"),
+    app_commands.Choice(name="Dow Jones", value="dow"),
+    app_commands.Choice(name="Russell 2000", value="russell2000"),
+]
+
+async def _run_heatmap_command(
+    interaction: discord.Interaction,
+    *,
+    universe: str,
+):
+    """FinViz-style nested treemap (v=152 export; slow)."""
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in `.env` to use `/heatmap`.", ephemeral=True
         )
-        csv_bytes = _rebuild_csv(columns, rows)
-        fname = f"groups_{group_val}_{view_name}.csv"
-        file = discord.File(io.BytesIO(csv_bytes), filename=fname)
+        return
 
-    embed.set_footer(text="Data from FinViz Elite")
+    await interaction.response.defer()
+    try:
+        images, as_of = await asyncio.to_thread(
+            build_daily_heatmaps,
+            universe=universe,
+        )
+    except Exception as e:
+        logger.exception("heatmap failed for %s", interaction.user)
+        await interaction.followup.send(f"Heatmap build failed: `{e}`")
+        return
 
-    if file:
-        await interaction.followup.send(embed=embed, file=file)
-    else:
-        await interaction.followup.send(embed=embed)
+    if not images or as_of is None:
+        msg = (
+            "Could not build a treemap — the CSV export may have failed (check **FINVIZ_API_KEY** and "
+            "`FINVIZ_V152_EXPORT_TIMEOUT_SEC`), or **too few tickers** matched the selected index universe."
+        )
+        await interaction.followup.send(msg)
+        return
+
+    files = [discord.File(io.BytesIO(png), filename=name) for name, png in images]
+    filt = f"universe=`{universe}`"
+    embed = discord.Embed(
+        title="Daily performance treemap",
+        description=(
+            f"**Size** = market cap · **Color** = change % (delayed). "
+            f"**{as_of.isoformat()}**. {filt}\n"
+            f"[Open Finviz screener]({FINVIZ_V152_SCREENER_URL})"
+        ),
+        color=0x06B6D4,
+    )
+    embed.set_footer(text="Pradly Portal • FinViz Elite • nested squarify layout")
+    await interaction.followup.send(embed=embed, files=files)
+    logger.info("heatmap: %d file(s) for %s", len(files), interaction.user)
+
+
+@tree.command(
+    name="heatmap",
+    description="FinViz-style market treemap by index (S&P 500 default). Size=cap, color=change %. Slow.",
+)
+@app_commands.choices(universe=_HEATMAP_UNIVERSE_CHOICES)
+@app_commands.describe(
+    universe="Benchmark / index (default S&P 500; includes stocks and ETFs in that index)",
+)
+async def heatmap_command(
+    interaction: discord.Interaction,
+    universe: str = "sp500",
+):
+    await _run_heatmap_command(
+        interaction,
+        universe=universe,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -757,6 +974,122 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
         await interaction.followup.send(embed=embed, file=file)
     else:
         await interaction.followup.send(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# /evsize  (EV grade + Kelly-based position sizing)
+# ---------------------------------------------------------------------------
+
+_SIDE_CHOICES = [
+    app_commands.Choice(name="Long", value="long"),
+    app_commands.Choice(name="Short", value="short"),
+]
+
+_GRADE_COLORS = {
+    "A+": 0x00C853, "A": 0x00E676, "A-": 0x69F0AE,
+    "B+": 0xFFD600, "B": 0xFFEA00, "B-": 0xFFF176,
+    "C": 0xFF9100, "D": 0xFF1744,
+}
+
+
+def _pct(v: float) -> str:
+    return f"{v * 100:+.2f}%"
+
+
+def _build_ev_embed(r: EVResult) -> discord.Embed:
+    color = _GRADE_COLORS.get(r.grade, 0x546E7A)
+    title = f"EV Grade: {r.grade}  —  {r.side.upper()} @ ${r.entry:,.2f}"
+
+    embed = discord.Embed(title=title, color=color)
+
+    embed.add_field(
+        name="Setup",
+        value=(
+            f"**Side:** {r.side.capitalize()}\n"
+            f"**Entry:** ${r.entry:,.2f}\n"
+            f"**Target:** ${r.target:,.2f}\n"
+            f"**Stop:** ${r.stop:,.2f}\n"
+            f"**Win prob:** {r.probability:.1f}%"
+        ),
+        inline=True,
+    )
+
+    embed.add_field(
+        name="Risk / Reward",
+        value=(
+            f"**Reward (R):** ${r.reward:,.2f}\n"
+            f"**Risk (L):** ${r.risk:,.2f}\n"
+            f"**R:L ratio:** {r.b:.2f}\n"
+            f"**EV / share:** ${r.ev_per_share:,.4f}\n"
+            f"**EV/R:** {_pct(r.evr)}"
+        ),
+        inline=True,
+    )
+
+    if r.f_kelly <= 0:
+        sizing_text = (
+            "**Full Kelly:** 0% (no edge)\n"
+            "**Suggested risk:** $0.00\n"
+            "**Shares:** 0\n\n"
+            "This setup has **no positive expected value** under the given probability. "
+            "Consider passing or improving the R:L ratio."
+        )
+    else:
+        sizing_text = (
+            f"**Full Kelly:** {_pct(r.f_kelly)}\n"
+            f"**¼ Kelly used:** {_pct(r.f_trade)}\n"
+            f"**Daily budget:** ${r.daily_risk:,.2f}\n"
+            f"**Suggested risk:** ${r.suggested_risk:,.2f}\n"
+            f"**Shares:** {r.shares:,}"
+        )
+
+    embed.add_field(name="Position Sizing", value=sizing_text, inline=False)
+
+    embed.set_footer(
+        text="Educational tool only — not financial advice. Uses ¼ Kelly with 50% single-trade cap."
+    )
+    return embed
+
+
+@tree.command(name="evsize", description="EV grade and position sizing for a trade setup")
+@app_commands.describe(
+    side="Long or Short",
+    entry="Entry price",
+    target="Target price",
+    stop="Stop-loss price",
+    probability="Win probability (0-100%)",
+    daily_risk="Max loss budget for the day in USD",
+)
+@app_commands.choices(side=_SIDE_CHOICES)
+async def evsize_command(
+    interaction: discord.Interaction,
+    side: app_commands.Choice[str],
+    entry: float,
+    target: float,
+    stop: float,
+    probability: float,
+    daily_risk: float,
+):
+    try:
+        result = ev_compute(
+            side=side.value,
+            entry=entry,
+            target=target,
+            stop=stop,
+            probability=probability,
+            daily_risk=daily_risk,
+        )
+    except SizingError as e:
+        await interaction.response.send_message(str(e), ephemeral=True)
+        return
+
+    embed = _build_ev_embed(result)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    logger.info(
+        "evsize %s entry=%.2f target=%.2f stop=%.2f prob=%.1f risk=%.2f -> grade=%s $%.2f by %s",
+        result.side, entry, target, stop, probability, daily_risk,
+        result.grade, result.suggested_risk, interaction.user,
+    )
 
 
 # ---------------------------------------------------------------------------

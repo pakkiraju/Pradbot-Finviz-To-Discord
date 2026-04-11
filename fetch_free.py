@@ -221,8 +221,10 @@ def _fetch_with_screener(url: str, caller: str = "") -> list[dict]:
 def fetch_scan(scan_def) -> list[dict]:
     """Fetch scan data using the free finviz Screener for the given ScanDef.
 
-    Iterates over the scan's export_urls (converting them to screener URLs),
-    deduplicates tickers, sorts by change% descending, returns top 50.
+    Iterates over the scan's export_urls (converting them to screener URLs), or
+    *screener_url* alone when export_urls is empty (e.g. Top Gainers / Losers).
+    Deduplicates tickers, sorts by daily change (gainers: highest first; losers: lowest first),
+    returns top 50.
     """
     rows: list[dict] = []
     seen: set[str] = set()
@@ -243,5 +245,13 @@ def fetch_scan(scan_def) -> list[dict]:
                 seen.add(t)
                 rows.append(normed)
 
-    rows.sort(key=_change_sort_key, reverse=True)
+    mk = getattr(scan_def, "movers_kind", None)
+    reverse = mk != "losers"
+    rows.sort(key=_change_sort_key, reverse=reverse)
     return rows[:50]
+
+
+def fetch_scan_with_screener(scan_def) -> tuple[list[dict], str]:
+    """Same as :func:`fetch_scan` but also returns *scan_def.screener_url* for embed links."""
+    rows = fetch_scan(scan_def)
+    return rows, scan_def.screener_url or ""

@@ -59,13 +59,16 @@ def _append_auth(url: str) -> str:
     return f"{url}{sep}auth={api_key}"
 
 
-def _fetch_csv(url: str, caller: str = "") -> list[dict]:
-    """GET a CSV export URL with retries and return list of row dicts."""
+def fetch_csv_export(url: str, caller: str = "", timeout: int = 30) -> list[dict]:
+    """GET a CSV export URL with retries and return list of row dicts.
+
+    Use a larger *timeout* (e.g. 120–180) for very large v=152 full-universe exports.
+    """
     authed_url = _append_auth(url)
 
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.get(authed_url, headers=_HEADERS, timeout=30)
+            resp = requests.get(authed_url, headers=_HEADERS, timeout=timeout)
             if resp.status_code == 429:
                 wait = (2 ** attempt) * 15
                 logger.warning("[%s] 429 rate limit, waiting %ds (attempt %d)", caller, wait, attempt + 1)
@@ -100,6 +103,11 @@ def _fetch_csv(url: str, caller: str = "") -> list[dict]:
     except Exception as e:
         logger.warning("[%s] CSV parse failed: %s", caller, e)
         return []
+
+
+def _fetch_csv(url: str, caller: str = "") -> list[dict]:
+    """GET a CSV export URL (default 30s timeout)."""
+    return fetch_csv_export(url, caller=caller, timeout=30)
 
 
 def _parse_num(s) -> float | None:
@@ -190,9 +198,15 @@ def _normalize_row(raw: dict) -> dict:
 def fetch_scan(scan_def) -> list[dict]:
     """Fetch scan data from FinViz Elite for the given ScanDef.
 
-    Iterates over scan_def.export_urls, fetches CSV from each, normalizes
-    rows, and deduplicates by ticker.
+    For *movers_kind* ``gainers`` / ``losers``, uses :func:`fetch_top_movers` (Top Gainers/Losers
+    preset). Otherwise iterates over *export_urls*, fetches CSV from each, normalizes rows,
+    and deduplicates by ticker.
     """
+    mk = getattr(scan_def, "movers_kind", None)
+    if mk in ("gainers", "losers"):
+        rows, _ = fetch_top_movers(mk, limit=50)
+        return rows
+
     api_key = _get_api_key()
     if not api_key:
         logger.error(
@@ -229,3 +243,104 @@ def _change_sort_key(row: dict) -> float:
         return float(str(val).replace("%", "").replace(",", ""))
     except (ValueError, TypeError):
         return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Top movers (gainers / losers)
+# ---------------------------------------------------------------------------
+
+_TOP_MOVERS_EXPORT = "https://elite.finviz.com/export.ashx"
+_TOP_MOVERS_SCREENER = "https://elite.finviz.com/screener.ashx"
+
+_MOVERS_SIGNALS = {
+    "gainers": "ta_topgainers",
+    "losers": "ta_toplosers",
+}
+
+# v=141 + this c= string matches scan_registry exports — CSV headers line up with
+# _normalize_row (Ticker, Price, Change, Volume, …). v=152 column IDs do not.
+_MOVERS_EXPORT_VIEW = "141"
+_MOVERS_COLUMNS = "1,47,61,62,63,64,65"
+
+
+def _movers_volume_csv_to_shares(raw) -> float | None:
+    """Convert FinViz Volume cell to share count for filtering / display.
+
+    Elite screener exports often list **daily volume in thousands** (e.g. cell 1500 = 1.5M shares).
+    Users pass *min_volume* in **actual shares** (e.g. 1_000_000). Set
+    FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares in .env if your export already uses full shares.
+    """
+    n = _parse_num(raw)
+    if n is None:
+        return None
+    unit = os.environ.get("FINVIZ_MOVERS_VOLUME_CSV_UNIT", "thousands").strip().lower()
+    if unit in ("shares", "full", "1", "raw"):
+        return n
+    # default: thousands (FinViz-style)
+    return n * 1000.0
+
+
+def fetch_top_movers(
+    kind: str,
+    *,
+    min_price: float | None = None,
+    min_volume: float | None = None,
+    limit: int = 10,
+) -> tuple[list[dict], str]:
+    """Fetch top gainers or losers from FinViz Elite.
+
+    Returns (rows, screener_url). Rows are normalized dicts sorted by |change|
+    (descending for gainers, ascending for losers), capped at *limit*.
+    """
+    if kind not in _MOVERS_SIGNALS:
+        raise ValueError(f"kind must be 'gainers' or 'losers', got {kind!r}")
+
+    api_key = _get_api_key()
+    if not api_key:
+        return [], ""
+
+    signal = _MOVERS_SIGNALS[kind]
+    sort = "-change" if kind == "gainers" else "change"
+    export_url = (
+        f"{_TOP_MOVERS_EXPORT}?v={_MOVERS_EXPORT_VIEW}&s={signal}"
+        f"&o={sort}&c={_MOVERS_COLUMNS}"
+    )
+    # Screener link: user-facing FinViz UI (v=152 custom) — data comes from export above.
+    screener_url = f"{_TOP_MOVERS_SCREENER}?v=152&s={signal}"
+
+    raw_rows = _fetch_csv(export_url, caller=f"top_{kind}")
+    rows: list[dict] = []
+    for r in raw_rows:
+        normed = _normalize_row(r)
+        if not normed.get("ticker"):
+            continue
+        if min_price is not None:
+            p = _parse_num(normed.get("price"))
+            if p is None or p < min_price:
+                continue
+        if min_volume is not None:
+            v_shares = _movers_volume_csv_to_shares(normed.get("volume"))
+            if v_shares is None or v_shares < float(min_volume):
+                continue
+        # Show volume in the embed as full share count when CSV is thousands.
+        vs = _movers_volume_csv_to_shares(normed.get("volume"))
+        if vs is not None:
+            normed["volume"] = f"{int(round(vs)):,}"
+        rows.append(normed)
+
+    reverse = kind == "gainers"
+    rows.sort(key=lambda r: abs(_change_sort_key(r)), reverse=reverse)
+    return rows[:limit], screener_url
+
+
+def fetch_scan_with_screener(scan_def) -> tuple[list[dict], str]:
+    """Fetch rows and the FinViz screener URL for the embed \"View on FinViz\" link.
+
+    Top movers scans return the dynamic v=152 URL from :func:`fetch_top_movers`; other scans
+    use *scan_def.screener_url*.
+    """
+    mk = getattr(scan_def, "movers_kind", None)
+    if mk in ("gainers", "losers"):
+        return fetch_top_movers(mk, limit=50)
+    rows = fetch_scan(scan_def)
+    return rows, scan_def.screener_url or ""
