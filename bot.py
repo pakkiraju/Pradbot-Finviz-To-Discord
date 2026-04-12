@@ -69,7 +69,11 @@ logger = logging.getLogger("pradbot")
 # ---------------------------------------------------------------------------
 
 def _norm_secret(raw: str) -> str:
-    return raw.strip().removeprefix("\ufeff").strip()
+    s = raw.strip().removeprefix("\ufeff").strip()
+    # Railway / raw .env pastes sometimes store wrapping "..." as part of the value.
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1].strip()
+    return s
 
 
 def _secret(*names: str) -> str:
