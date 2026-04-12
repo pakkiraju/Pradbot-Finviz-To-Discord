@@ -89,7 +89,11 @@ if not DISCORD_BOT_TOKEN:
         discord_key_names,
     )
     logger.critical(
-        "Railway: save Variables, deploy staged changes, service must be the one running python bot.py."
+        "Railway: apply staged Variable changes (purple = not live yet), then Deploy — not only Redeploy."
+    )
+    logger.critical(
+        "If secrets are only under Project Settings → Shared Variables, they are not injected until this service "
+        "has a reference variable, e.g. DISCORD_BOT_TOKEN=${{shared.DISCORD_BOT_TOKEN}} (see Railway Variables docs)."
     )
     logger.critical("env_keys_count=%s env_keys=%s", len(os.environ), sorted(os.environ.keys()))
     sys.exit(1)
