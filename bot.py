@@ -20,6 +20,11 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("pradbot")
+logger.info(
+    "deploy_meta git_branch=%s git_sha=%s",
+    os.environ.get("RAILWAY_GIT_BRANCH", ""),
+    os.environ.get("RAILWAY_GIT_COMMIT_SHA", ""),
+)
 
 
 def _norm_secret(raw: str) -> str:
