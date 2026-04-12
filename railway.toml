@@ -1,0 +1,7 @@
+# PradBot: use a Worker service on Railway (not Web Service — no HTTP server).
+# Set DISCORD_BOT_TOKEN and FINVIZ_API_KEY in the service Variables tab.
+# Optional: PYTHONUNBUFFERED=1 for immediate log streaming.
+
+[deploy]
+startCommand = "python bot.py"
+restartPolicyType = "ALWAYS"
