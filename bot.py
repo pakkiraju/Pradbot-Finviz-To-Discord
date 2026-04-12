@@ -113,6 +113,8 @@ def _railway_like_runtime() -> bool:
 
 DISCORD_BOT_TOKEN = _secret("DISCORD_BOT_TOKEN", "DISCORD_TOKEN") or _discord_token_from_file()
 if not DISCORD_BOT_TOKEN:
+    raw_dt = os.environ.get("DISCORD_BOT_TOKEN")
+    raw_alt = os.environ.get("DISCORD_TOKEN")
     discord_key_names = [k for k in os.environ if "DISCORD" in k.upper().replace(" ", "")]
     logger.critical(
         "DISCORD_BOT_TOKEN not set. Set the env var (e.g. Railway service Variables) "
@@ -121,13 +123,19 @@ if not DISCORD_BOT_TOKEN:
     )
     logger.critical(
         "Diagnostics (no secret values): railway_like_runtime=%s; "
+        "DISCORD_BOT_TOKEN key in environ=%s len_after_strip=%s; "
+        "DISCORD_TOKEN key in environ=%s len_after_strip=%s; "
         "env keys containing DISCORD=%s",
         _railway_like_runtime(),
+        "DISCORD_BOT_TOKEN" in os.environ,
+        len(_norm_secret(raw_dt)) if raw_dt is not None else -1,
+        "DISCORD_TOKEN" in os.environ,
+        len(_norm_secret(raw_alt)) if raw_alt is not None else -1,
         discord_key_names,
     )
     logger.critical(
-        "Railway: new or edited variables are staged until you click Deploy on the Variables "
-        "tab (or redeploy). The deployment Details view must list your variables, not 0."
+        "Railway: put variables on the Worker service (not only project-level if it does not apply). "
+        "Redeploy after saving. Raw editor: use KEY=value with no quotes, one per line."
     )
     sys.exit(1)
 

@@ -1,8 +1,7 @@
-"""Load local ``.env`` for development. On Railway, use injected variables only."""
+"""Load local ``.env`` when present. Platform env vars always win (override=False)."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 _CONFIGURED = False
@@ -11,18 +10,14 @@ _CONFIGURED = False
 def configure_environment() -> None:
     """Call once at process startup (before reading secrets).
 
-    When ``RAILWAY_PROJECT_ID`` is set, Railway has already populated
-    ``os.environ``; we skip reading a ``.env`` file so nothing on disk can
-    interfere with ``python-dotenv`` parsing.
+    Loads ``.env`` next to this file with ``override=False``: variables already
+    set by the host (e.g. Railway dashboard) are never replaced. Missing keys
+    can still be filled from ``.env`` (local dev or a checked-in file).
     """
     global _CONFIGURED
     if _CONFIGURED:
         return
     _CONFIGURED = True
-
-    # Any Railway deployment injects multiple RAILWAY_* variables; do not rely on a single ID.
-    if any(k.startswith("RAILWAY_") for k in os.environ):
-        return
 
     try:
         from dotenv import load_dotenv
