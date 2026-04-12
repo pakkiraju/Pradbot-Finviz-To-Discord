@@ -70,7 +70,6 @@ logger = logging.getLogger("pradbot")
 
 def _norm_secret(raw: str) -> str:
     s = raw.strip().removeprefix("\ufeff").strip()
-    # Railway / raw .env pastes sometimes store wrapping "..." as part of the value.
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
         s = s[1:-1].strip()
     return s
@@ -122,10 +121,9 @@ if not DISCORD_BOT_TOKEN:
         Path(__file__).resolve().parent,
     )
     logger.critical(
-        "Diagnostics (no secret values): railway_like_runtime=%s; "
-        "DISCORD_BOT_TOKEN key in environ=%s len_after_strip=%s; "
-        "DISCORD_TOKEN key in environ=%s len_after_strip=%s; "
-        "env keys containing DISCORD=%s",
+        "Diagnostics (no secrets): env_var_count=%s railway_env=%s "
+        "DISCORD_BOT_TOKEN_defined=%s len=%s DISCORD_TOKEN_defined=%s len=%s discord_key_names=%s",
+        len(os.environ),
         _railway_like_runtime(),
         "DISCORD_BOT_TOKEN" in os.environ,
         len(_norm_secret(raw_dt)) if raw_dt is not None else -1,
@@ -134,8 +132,8 @@ if not DISCORD_BOT_TOKEN:
         discord_key_names,
     )
     logger.critical(
-        "Railway: put variables on the Worker service (not only project-level if it does not apply). "
-        "Redeploy after saving. Raw editor: use KEY=value with no quotes, one per line."
+        "Railway: confirm staged Variables are deployed; use this service's Variables tab; "
+        "raw editor format is KEY=value per line without quotes."
     )
     sys.exit(1)
 
