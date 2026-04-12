@@ -12,13 +12,11 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-_ENV_LOADED = False
 _MAX_RETRIES = 4
 
 _HEADERS = {
@@ -40,18 +38,7 @@ class QuoteBar:
     volume: int
 
 
-def _load_env():
-    global _ENV_LOADED
-    if _ENV_LOADED:
-        return
-    import env_setup
-
-    env_setup.configure_environment()
-    _ENV_LOADED = True
-
-
 def _get_api_key() -> str | None:
-    _load_env()
     key = os.environ.get("FINVIZ_API_KEY", "").strip()
     return key or None
 
@@ -68,11 +55,7 @@ def fetch_quote(symbol: str, last_n: int = 5) -> list[QuoteBar]:
     """Fetch daily OHLCV bars for *symbol*, returning the most recent *last_n* bars newest-first."""
     api_key = _get_api_key()
     if not api_key:
-        logger.error(
-            "FINVIZ_API_KEY not set. Create a .env file in %s with:\n"
-            "  FINVIZ_API_KEY=your_key_here",
-            Path(__file__).resolve().parent,
-        )
+        logger.error("FINVIZ_API_KEY not set. Add it in Railway → service → Variables.")
         return []
 
     url = f"https://elite.finviz.com/quote_export.ashx?t={symbol}&p=d&auth={api_key}"

@@ -1,7 +1,7 @@
 """PradBot — Discord bot for Finviz charts and more (slash commands).
 
 Run with:  python bot.py
-Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
+Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY from the host environment (Railway Variables).
 
 Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only (no global) so test
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
@@ -18,10 +18,6 @@ import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-
-import env_setup
-
-env_setup.configure_environment()
 
 import discord
 from discord import app_commands
@@ -116,9 +112,7 @@ if not DISCORD_BOT_TOKEN:
     raw_alt = os.environ.get("DISCORD_TOKEN")
     discord_key_names = [k for k in os.environ if "DISCORD" in k.upper().replace(" ", "")]
     logger.critical(
-        "DISCORD_BOT_TOKEN not set. Set the env var (e.g. Railway service Variables) "
-        "or add it to .env in %s",
-        Path(__file__).resolve().parent,
+        "DISCORD_BOT_TOKEN not set. Add it under Railway → this service → Variables, then redeploy.",
     )
     logger.critical(
         "Diagnostics (no secrets): env_var_count=%s railway_env=%s "
@@ -132,8 +126,7 @@ if not DISCORD_BOT_TOKEN:
         discord_key_names,
     )
     logger.critical(
-        "Railway: confirm staged Variables are deployed; use this service's Variables tab; "
-        "raw editor format is KEY=value per line without quotes."
+        "Railway: save Variables, deploy staged changes, service must be the one running python bot.py."
     )
     sys.exit(1)
 
@@ -697,7 +690,7 @@ async def purge_command(interaction: discord.Interaction, amount: str):
 async def scans_command(interaction: discord.Interaction, scan: app_commands.Choice[str]):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/scans`.",
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/scans`.",
             ephemeral=True,
         )
         return
@@ -825,7 +818,7 @@ async def top_gainers_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/top_gainers`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/top_gainers`.", ephemeral=True
         )
         return
 
@@ -850,7 +843,7 @@ async def top_losers_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/top_losers`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/top_losers`.", ephemeral=True
         )
         return
 
@@ -883,7 +876,7 @@ async def inplay_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/inplay`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/inplay`.", ephemeral=True
         )
         return
 
@@ -932,7 +925,7 @@ async def earnings_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/earnings`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/earnings`.", ephemeral=True
         )
         return
 
@@ -967,7 +960,7 @@ async def _run_heatmap_command(
     """FinViz-style nested treemap (v=152 export; slow)."""
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/heatmap`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/heatmap`.", ephemeral=True
         )
         return
 

@@ -30,7 +30,7 @@ def fetch_v152_full_universe(
 ) -> list[dict]:
     """Download the full v=152 Elite CSV (all rows FinViz returns in one response).
 
-    Requires ``FINVIZ_API_KEY`` in ``.env``. Returns ``[]`` if unconfigured or on failure.
+    Requires ``FINVIZ_API_KEY`` in the environment (Railway Variables). Returns ``[]`` if unconfigured or on failure.
 
     Override timeout with env ``FINVIZ_V152_EXPORT_TIMEOUT_SEC`` (default 180).
     """
