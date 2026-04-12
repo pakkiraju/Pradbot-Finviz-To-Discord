@@ -20,7 +20,8 @@ def configure_environment() -> None:
         return
     _CONFIGURED = True
 
-    if os.environ.get("RAILWAY_PROJECT_ID"):
+    # Any Railway deployment injects multiple RAILWAY_* variables; do not rely on a single ID.
+    if any(k.startswith("RAILWAY_") for k in os.environ):
         return
 
     try:
