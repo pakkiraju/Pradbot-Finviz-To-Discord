@@ -43,13 +43,9 @@ def _load_env():
     global _ENV_LOADED
     if _ENV_LOADED:
         return
-    try:
-        from dotenv import load_dotenv
-        env_path = Path(__file__).resolve().parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
+    import env_setup
+
+    env_setup.configure_environment()
     _ENV_LOADED = True
 
 

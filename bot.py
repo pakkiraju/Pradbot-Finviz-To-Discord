@@ -19,6 +19,10 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import env_setup
+
+env_setup.configure_environment()
+
 import discord
 from discord import app_commands
 
@@ -64,18 +68,19 @@ logger = logging.getLogger("pradbot")
 # Env
 # ---------------------------------------------------------------------------
 
-def _load_env():
-    try:
-        from dotenv import load_dotenv
-        env_path = Path(__file__).resolve().parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
+def _secret(*names: str) -> str:
+    """First non-empty env value among ``names`` (strips whitespace / UTF-8 BOM)."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        v = raw.strip().removeprefix("\ufeff").strip()
+        if v:
+            return v
+    return ""
 
-_load_env()
 
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+DISCORD_BOT_TOKEN = _secret("DISCORD_BOT_TOKEN", "DISCORD_TOKEN")
 if not DISCORD_BOT_TOKEN:
     logger.critical(
         "DISCORD_BOT_TOKEN not set. Set the env var (e.g. Railway service Variables) "
