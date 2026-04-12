@@ -78,7 +78,8 @@ _load_env()
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
 if not DISCORD_BOT_TOKEN:
     logger.critical(
-        "DISCORD_BOT_TOKEN not set. Add it to .env in %s",
+        "DISCORD_BOT_TOKEN not set. Set the env var (e.g. Railway service Variables) "
+        "or add it to .env in %s",
         Path(__file__).resolve().parent,
     )
     sys.exit(1)
