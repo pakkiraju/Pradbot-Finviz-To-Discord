@@ -10,59 +10,17 @@ SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unse
 /scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
 """
 
-import asyncio
-import io
 import logging
 import os
-import re
 import sys
-from datetime import date, datetime, timezone
 from pathlib import Path
 
-import discord
-from discord import app_commands
-
-from discord_payload import build_embeds
-from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
-from finviz_chart import (
-    CHART_TIMEFRAME_FILE_TAG,
-    CHART_TIMEFRAME_LABELS,
-    fetch_chart,
-    validate_symbol,
-)
-from finviz_news import fetch_news
-from finviz_options import fetch_options
-from finviz_quote import fetch_quote
-from finviz_v152_ticker import fetch_v152_ticker_snapshot
-from gex_compute import compute_gex
-from ev_position_sizing import compute as ev_compute, SizingError, EVResult
-from fetch_v152_universe import FINVIZ_V152_SCREENER_URL
-from finviz_earnings import (
-    EarningsPeriod,
-    _fmt_shares_compact,
-    fetch_earnings_rows,
-    format_earnings_embed_description,
-)
-from finviz_inplay import (
-    fetch_inplay_rows,
-    format_inplay_description,
-    format_inplay_smallcap_description,
-)
-from heatmap_pipeline import build_daily_heatmaps
-from scan_registry import SCAN_BY_ID, SCANS
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("pradbot")
 
-# ---------------------------------------------------------------------------
-# Env
-# ---------------------------------------------------------------------------
 
 def _norm_secret(raw: str) -> str:
     s = raw.strip().removeprefix("\ufeff").strip()
@@ -128,7 +86,45 @@ if not DISCORD_BOT_TOKEN:
     logger.critical(
         "Railway: save Variables, deploy staged changes, service must be the one running python bot.py."
     )
+    logger.critical("env_keys_count=%s env_keys=%s", len(os.environ), sorted(os.environ.keys()))
     sys.exit(1)
+
+import asyncio
+import io
+import re
+from datetime import date, datetime, timezone
+
+import discord
+from discord import app_commands
+
+from discord_payload import build_embeds
+from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
+from finviz_chart import (
+    CHART_TIMEFRAME_FILE_TAG,
+    CHART_TIMEFRAME_LABELS,
+    fetch_chart,
+    validate_symbol,
+)
+from finviz_news import fetch_news
+from finviz_options import fetch_options
+from finviz_quote import fetch_quote
+from finviz_v152_ticker import fetch_v152_ticker_snapshot
+from gex_compute import compute_gex
+from ev_position_sizing import compute as ev_compute, SizingError, EVResult
+from fetch_v152_universe import FINVIZ_V152_SCREENER_URL
+from finviz_earnings import (
+    EarningsPeriod,
+    _fmt_shares_compact,
+    fetch_earnings_rows,
+    format_earnings_embed_description,
+)
+from finviz_inplay import (
+    fetch_inplay_rows,
+    format_inplay_description,
+    format_inplay_smallcap_description,
+)
+from heatmap_pipeline import build_daily_heatmaps
+from scan_registry import SCAN_BY_ID, SCANS
 
 # ---------------------------------------------------------------------------
 # Bot setup
