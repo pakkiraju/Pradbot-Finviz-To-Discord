@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
@@ -31,6 +32,8 @@ _HEADERS = {
 
 _MAX_RETRIES = 3
 _EMBED_COLOR = 0x0D5C5C  # dark teal (IPOScoop table header)
+# US Eastern calendar day for “today” (IPOScoop lists US listings).
+_US_EAST = ZoneInfo("America/New_York")
 
 # Keys for each row dict
 ROW_KEYS = (
@@ -105,19 +108,94 @@ def fetch_ipo_calendar_rows() -> list[dict[str, str]]:
     return rows_out
 
 
-def _row_to_line(row: dict[str, str]) -> str:
-    return "\t".join(row[k] for k in ROW_KEYS)
+def _format_ipo_block(row: dict[str, str]) -> str:
+    """One IPO: label + value on the same line; single newlines only (spacing between companies is added by caller)."""
+    lines = [
+        f"**Company:** {row['company']}",
+        f"**Symbol:** {row['symbol']}",
+        f"**Lead Managers:** {row['lead_managers']}",
+        f"**Shares (millions):** {row['shares_millions']}",
+        f"**Price low:** {row['price_low']}",
+        f"**Price high:** {row['price_high']}",
+        f"**Est. $ volume:** {row['est_volume']}",
+        f"**Date:** {row['expected_trade']}",
+    ]
+    return "\n".join(lines)
 
 
-def build_ipo_calendar_embed_dicts(rows: list[dict[str, str]]) -> list[dict]:
+def parse_expected_trade_date(expected_trade: str) -> date | None:
+    """First M/D/YYYY in IPOScoop 'Expected to Trade' (e.g. '4/14/2026 Tuesday', '4/17/2026 Week of')."""
+    s = (expected_trade or "").strip()
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", s)
+    if not m:
+        return None
+    month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def trading_date_today_us_east() -> date:
+    """Calendar date in America/New_York (matches typical US IPO listing day)."""
+    return datetime.now(_US_EAST).date()
+
+
+def filter_ipo_rows_for_today(
+    rows: list[dict[str, str]],
+    as_of: date | None = None,
+) -> list[dict[str, str]]:
+    """Keep rows whose leading expected-trade date equals *as_of* (default: today US Eastern)."""
+    target = as_of if as_of is not None else trading_date_today_us_east()
+    out: list[dict[str, str]] = []
+    for r in rows:
+        d = parse_expected_trade_date(r.get("expected_trade", ""))
+        if d == target:
+            out.append(r)
+    return out
+
+
+def _chunk_ipo_descriptions(blocks: list[str]) -> list[str]:
+    """Split IPO blocks across multiple descriptions within Discord length limits."""
+    sep = "\n---\n"
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for block in blocks:
+        if len(block) > MAX_DESC_LEN:
+            block = block[: MAX_DESC_LEN - 3].rstrip() + "..."
+
+        sep_len = len(sep) if current else 0
+        trial_len = current_len + sep_len + len(block)
+
+        if trial_len > MAX_DESC_LEN and current:
+            chunks.append(sep.join(current))
+            current = [block]
+            current_len = len(block)
+        else:
+            current.append(block)
+            current_len = trial_len
+
+    if current:
+        chunks.append(sep.join(current))
+    return chunks
+
+
+def build_ipo_calendar_embed_dicts(
+    rows: list[dict[str, str]],
+    *,
+    title_base: str = "IPO Calendar",
+    empty_description: str = "*Could not load any IPO rows from IPOScoop.*",
+) -> list[dict]:
     """Build one or more webhook-style embed dicts for Discord (chunked description)."""
     timestamp = datetime.now(timezone.utc).isoformat()
 
     if not rows:
         return [
             {
-                "title": "IPO Calendar",
-                "description": "*Could not load any IPO rows from IPOScoop.*",
+                "title": title_base,
+                "description": empty_description,
                 "color": _EMBED_COLOR,
                 "timestamp": timestamp,
                 "footer": {"text": "IPOScoop"},
@@ -125,44 +203,14 @@ def build_ipo_calendar_embed_dicts(rows: list[dict[str, str]]) -> list[dict]:
             }
         ]
 
-    header = "\t".join(
-        [
-            "Company",
-            "Symbol",
-            "Lead Managers",
-            "Shares (M)",
-            "Price Low",
-            "Price High",
-            "Est. $ Volume",
-            "Expected",
-        ]
-    )
-    data_lines = [_row_to_line(r) for r in rows]
-
-    chunks: list[list[str]] = []
-    current: list[str] = []
-    current_len = 0
-    code_overhead = len("```\n") + len(header) + len("\n") + len("```")
-
-    for line in data_lines:
-        line_len = len(line) + 1
-        if current_len + line_len + code_overhead > MAX_DESC_LEN and current:
-            chunks.append(current)
-            current = []
-            current_len = 0
-        current.append(line)
-        current_len += line_len
-    if current:
-        chunks.append(current)
-
+    blocks = [_format_ipo_block(r) for r in rows]
+    descriptions = _chunk_ipo_descriptions(blocks)
     embeds: list[dict] = []
-    total_parts = len(chunks)
-    for idx, chunk in enumerate(chunks):
-        body = "\n".join(chunk)
-        desc = f"```\n{header}\n{body}\n```"
-        title = "IPO Calendar"
+    total_parts = len(descriptions)
+    for idx, desc in enumerate(descriptions):
+        title = title_base
         if total_parts > 1:
-            title = f"IPO Calendar ({idx + 1}/{total_parts})"
+            title = f"{title_base} ({idx + 1}/{total_parts})"
         embeds.append(
             {
                 "title": title,
