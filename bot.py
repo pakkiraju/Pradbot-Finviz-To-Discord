@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
 """
 
 import logging
@@ -161,6 +161,8 @@ from finviz_inplay import (
     format_inplay_description,
     format_inplay_smallcap_description,
 )
+from inplay_earnings import fetch_inplay_earnings_rows, format_inplay_earnings_description
+from massive_rest import get_massive_api_key
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -968,15 +970,16 @@ async def top_losers_command(
 _INPLAY_SCANNER_CHOICES = [
     app_commands.Choice(name="Default", value="default"),
     app_commands.Choice(name="Small caps", value="smallcaps"),
+    app_commands.Choice(name="Earnings", value="earnings"),
 ]
 
 
 @tree.command(
     name="inplay",
-    description="Stocks in play: news + liquidity (default) or small-cap liquidity screen (FinViz Elite)",
+    description="Stocks in play: news + liquidity, small caps, or earnings + extended-hours %EAVOL (FinViz + Massive)",
 )
 @app_commands.describe(
-    scanner="Default: news + liquidity screen. Small caps: cap $5M–$2B, vol + rel vol; v=152 screener + per-row news links.",
+    scanner="Default: news + liquidity. Small caps: cap + vol screen. Earnings: AMC/BMO names + overnight %EAVOL vs 21d avg (needs MASSIVE_API_KEY).",
 )
 @app_commands.choices(scanner=_INPLAY_SCANNER_CHOICES)
 async def inplay_command(
@@ -989,6 +992,33 @@ async def inplay_command(
         )
         return
 
+    if scanner == "earnings":
+        if not get_massive_api_key():
+            await interaction.response.send_message(
+                "Set **MASSIVE_API_KEY** (or **POLYGON_API_KEY**) in Railway Variables to use "
+                "**/inplay** with **Earnings** (extended-hours volume from Massive).",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer()
+        rows, screener_url = await asyncio.to_thread(fetch_inplay_earnings_rows)
+        desc = format_inplay_earnings_description(rows)
+        title = "In play — Earnings (%EAVOL)"
+        footer = (
+            "FinViz Elite • earnings AMC/BMO • avg vol >1M • price >$1 • "
+            "Massive prior AH + current pre-market vs 21d avg vol • ** = %EAVOL ≥ 20%"
+        )
+        embed = discord.Embed(
+            title=title,
+            description=desc,
+            url=screener_url,
+            color=0x06B6D4,
+        )
+        embed.set_footer(text=footer)
+        await interaction.followup.send(embed=embed)
+        logger.info("inplay (earnings): %d rows for %s", len(rows), interaction.user)
+        return
+
     mode = "smallcaps" if scanner == "smallcaps" else "default"
 
     await interaction.response.defer()
@@ -997,13 +1027,13 @@ async def inplay_command(
         desc = format_inplay_smallcap_description(rows)
         title = "In play — Small caps"
         footer = (
-            "FinViz Elite • v=152 screener • cap $5M–$2B • cur vol >1M • rel vol >1.5 • delayed"
+            "FinViz Elite • v=152 screener • cap $5M–$2B • cur vol >1M • rel vol >1.5"
         )
     else:
         desc = format_inplay_description(rows)
         title = "In play"
         footer = (
-            "FinViz Elite • news today/yesterday • price >$1 • avg vol >1M • vol >500K • rel vol >1.5 • delayed"
+            "FinViz Elite • news today/yesterday • price >$1 • avg vol >1M • vol >500K • rel vol >1.5"
         )
     embed = discord.Embed(
         title=title,
@@ -1049,7 +1079,7 @@ async def earnings_command(
         url=screener_url,
         color=0x06B6D4,
     )
-    embed.set_footer(text="FinViz Elite • quotes delayed")
+    embed.set_footer(text="FinViz Elite • v=152 export")
     await interaction.followup.send(embed=embed)
     logger.info("earnings %s: %d rows for %s", p, len(rows), interaction.user)
 
@@ -1097,7 +1127,7 @@ async def _run_heatmap_command(
     embed = discord.Embed(
         title="Daily performance treemap",
         description=(
-            f"**Size** = market cap · **Color** = change % (delayed). "
+            f"**Size** = market cap · **Color** = change % · "
             f"**{as_of.isoformat()}**. {filt}\n"
             f"[Open Finviz screener]({FINVIZ_V152_SCREENER_URL})"
         ),

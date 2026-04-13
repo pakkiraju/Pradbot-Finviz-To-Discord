@@ -59,7 +59,7 @@ def render_group_bar_png(
     ax.set_yticklabels(short_labels, fontsize=8)
     ax.axvline(0, color="#333", linewidth=0.6)
     ax.set_xlabel("Mean daily change % (group)")
-    subtitle = f"FinViz v=152 • {as_of.isoformat()}" if as_of else "FinViz v=152 (delayed)"
+    subtitle = f"FinViz v=152 • {as_of.isoformat()}" if as_of else "FinViz v=152"
     ax.set_title(f"{title}\n{subtitle}", fontsize=11)
     ax.grid(axis="x", alpha=0.25)
 
