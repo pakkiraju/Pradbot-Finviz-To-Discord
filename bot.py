@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (exit defaults to ~4pm ET RTH close if omitted) uses Massive OHLC charts with level lines. /help lists commands and links README_URL when set.
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
 """
 
 import logging
@@ -161,9 +161,10 @@ from finviz_inplay import (
     format_inplay_description,
     format_inplay_smallcap_description,
 )
+from finviz_ah_movers import fetch_ah_movers_pair
 from inplay_earnings import fetch_inplay_earnings_rows, format_inplay_earnings_description
 from massive_rest import get_massive_api_key
-from top_opps_charts import build_study_charts, default_exit_rth_close_et, format_study_embed_lines
+from top_opps_charts import build_study_charts, resolve_default_exit_for_top_opps, study_levels_as_embed_fields
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -369,7 +370,8 @@ def _help_embed() -> discord.Embed:
             "`/scans` — **scan** (all presets or one)\n"
             "`/top_gainers` — optional **min_price**, **min_volume**\n"
             "`/top_losers` — optional **min_price**, **min_volume**\n"
-            "`/top_opps` — `symbol` · optional **entry**, **stop**, **exit** (exit defaults to RTH ~4pm ET if omitted)"
+            "`/ah_movers` — top 5 AH +3%+ and -3%+ (Elite liquidity filters)\n"
+            "`/top_opps` — `symbol` · optional **entry**, **stop**, **exit**, **notes** (notes under last chart)"
         ),
         inline=False,
     )
@@ -1012,6 +1014,51 @@ def _build_movers_embed(
     return embed
 
 
+def _ah_movers_table_block(rows: list[dict]) -> str:
+    """Monospace table: Symbol, Price, Change, Vol (M/B), AH (field value max 1024)."""
+    if not rows:
+        return "*No matches.*"
+    header = f"{'Sym':<6} {'Price':>10} {'Chg':>7} {'Vol':>9} {'AH':>9}"
+    lines = [header, "-" * len(header)]
+    for r in rows:
+        sym = (r.get("ticker") or "")[:6].ljust(6)
+        pr = (str(r.get("price") or ""))[:10].rjust(10)
+        chg = (str(r.get("change") or ""))[:7].rjust(7)
+        vol = (str(r.get("volume") or ""))[:9].rjust(9)
+        ah = (str(r.get("ah_change") or ""))[:9].rjust(9)
+        lines.append(f"{sym} {pr} {chg} {vol} {ah}")
+    text = "\n".join(lines)
+    if len(text) > 1010:
+        text = text[:1007] + "..."
+    return f"```\n{text}\n```"
+
+
+def _build_ah_movers_embed(
+    up_rows: list[dict],
+    down_rows: list[dict],
+    screener_up: str,
+    screener_dn: str,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="After hours movers (top 5 each)",
+        color=0x06B6D4,
+        url=screener_up,
+        description=f"[AH +3%+ screener]({screener_up}) · [AH -3%+ screener]({screener_dn})",
+    )
+    embed.add_field(
+        name="AH +3%+",
+        value=_ah_movers_table_block(up_rows),
+        inline=False,
+    )
+    embed.add_field(
+        name="AH -3%+",
+        value=_ah_movers_table_block(down_rows),
+        inline=False,
+    )
+    embed.set_footer(text="Data from FinViz Elite  |  AH ±3%, avg vol >1k, price >$1")
+    return embed
+
+
 @tree.command(name="top_gainers", description="Top 10 gaining stocks today (sorted by change %)")
 @app_commands.describe(
     min_price="Only show stocks at or above this price (optional)",
@@ -1060,6 +1107,29 @@ async def top_losers_command(
     embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
+
+
+@tree.command(
+    name="ah_movers",
+    description="Top 5 each: AH +3%+ and -3%+ movers (Elite: avg vol >1k, price >$1).",
+)
+async def ah_movers_command(interaction: discord.Interaction):
+    if not os.environ.get("FINVIZ_API_KEY", "").strip():
+        await interaction.response.send_message(
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/ah_movers`.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+    (up_rows, screener_up), (down_rows, screener_dn) = await asyncio.to_thread(fetch_ah_movers_pair)
+    embed = _build_ah_movers_embed(up_rows, down_rows, screener_up, screener_dn)
+    await interaction.followup.send(embed=embed)
+    logger.info(
+        "ah_movers: up=%d down=%d for %s",
+        len(up_rows),
+        len(down_rows),
+        interaction.user,
+    )
 
 
 @tree.command(
@@ -1347,15 +1417,32 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
 _TOP_OPPS_TIMEFRAMES = ("i1", "i5", "h", "d")
 
 
+def _top_opps_attach_notes_to_first_chart_embed(embeds: list[discord.Embed], text: str, *, study_mode: bool) -> None:
+    """First chart only: trade notes above the image. In study mode, a field after Entry/Stop (snapshot-style grid)."""
+    raw = text.strip()
+    if not raw or not embeds:
+        return
+    first = embeds[0]
+    if study_mode:
+        note_val = raw if len(raw) <= 1024 else raw[:1021] + "..."
+        first.add_field(name="Trade notes", value=note_val, inline=False)
+        return
+    header = "**Trade notes**\n"
+    max_total = 4096
+    note_body = raw if len(header) + len(raw) <= max_total else raw[: max(0, max_total - len(header) - 3)] + "..."
+    first.description = f"{header}{note_body}"[:max_total]
+
+
 @tree.command(
     name="top_opps",
-    description="1m/5m/1h/d + snapshot. Entry+stop for Massive study; exit optional (EOD default ~4pm ET).",
+    description="1m/5m/1h/d + snapshot. Study exit auto if omitted; optional notes on first chart.",
 )
 @app_commands.describe(
     symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)",
     entry="Optional entry price — use with stop for Massive execution study charts",
     stop="Optional stop price",
-    exit_price="Optional exit / target (omit to use last regular-session ~4pm ET close)",
+    exit_price="Optional exit / target (omit: last trade before 4pm ET, RTH close after)",
+    notes="Optional trade notes (first chart; above image — field under levels in study mode)",
 )
 async def top_opps_command(
     interaction: discord.Interaction,
@@ -1363,6 +1450,7 @@ async def top_opps_command(
     entry: float | None = None,
     stop: float | None = None,
     exit_price: float | None = None,
+    notes: str | None = None,
 ):
     ticker = validate_symbol(symbol)
     if ticker is None:
@@ -1373,8 +1461,8 @@ async def top_opps_command(
     study_mode = entry is not None and stop is not None
     if has_any_level and not study_mode:
         await interaction.response.send_message(
-            "Provide **entry** and **stop** together for execution study charts (**exit** is optional — defaults to last regular-session close ~4pm ET). "
-            "Or leave entry/stop/exit empty for default FinViz charts.",
+            "Provide **entry** and **stop** together for execution study charts (**exit** optional: **last trade** before 4pm ET, **session close** after). "
+            "Or leave entry/stop/exit empty for default FinViz charts. **Notes** optional on the first chart.",
             ephemeral=True,
         )
         return
@@ -1389,7 +1477,7 @@ async def top_opps_command(
 
     study_metrics: dict | None = None
     study_exit: float = 0.0
-    exit_is_rth_default = False
+    exit_default_kind: str | None = None
     if study_mode:
         results = await asyncio.gather(
             asyncio.to_thread(fetch_quote, ticker, 5),
@@ -1408,15 +1496,11 @@ async def top_opps_command(
         if prev_c is not None and prev_c != 0:
             pct_today = (latest_q.close - prev_c) / prev_c * 100.0
         if exit_price is None:
-            resolved_exit = await asyncio.to_thread(default_exit_rth_close_et, ticker)
-            if resolved_exit is None:
-                await interaction.followup.send(
-                    f"Could not load a regular-session (~4pm ET) close for **{ticker}** to use as default exit — "
-                    "pass **exit** explicitly, or check **MASSIVE_API_KEY** and logs."
-                )
-                return
-            study_exit = float(resolved_exit)
-            exit_is_rth_default = True
+            study_exit, exit_default_kind = await asyncio.to_thread(
+                resolve_default_exit_for_top_opps,
+                ticker,
+                float(latest_q.close),
+            )
         else:
             study_exit = float(exit_price)
         study_pairs, study_missing, study_metrics = await asyncio.to_thread(
@@ -1465,17 +1549,18 @@ async def top_opps_command(
             files.append(discord.File(io.BytesIO(data), filename=fn))
             emb = discord.Embed(
                 title=ticker,
-                color=0x2ECC71,
+                color=0x1ABC9C if study_mode else 0x2ECC71,
                 url=f"https://finviz.com/quote.ashx?t={ticker}",
             )
             if study_mode:
-                emb.description = format_study_embed_lines(
+                for name, value, inline in study_levels_as_embed_fields(
                     float(entry),
                     float(stop),
                     study_exit,
                     study_metrics,
-                    exit_is_rth_default=exit_is_rth_default,
-                )
+                    exit_default_kind=exit_default_kind,
+                ):
+                    emb.add_field(name=name, value=value, inline=inline)
             emb.set_image(url=f"attachment://{fn}")
             chart_embeds.append(emb)
         else:
@@ -1485,6 +1570,9 @@ async def top_opps_command(
         missing_labels = sorted(set(missing_labels) | set(finviz_missing))
     else:
         missing_labels = finviz_missing
+
+    if chart_embeds and notes and str(notes).strip():
+        _top_opps_attach_notes_to_first_chart_embed(chart_embeds, str(notes), study_mode=study_mode)
 
     if chart_embeds:
         await interaction.followup.send(embeds=chart_embeds, files=files)
