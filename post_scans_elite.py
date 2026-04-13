@@ -16,6 +16,22 @@ import sys
 import time
 from pathlib import Path
 
+
+def _load_dotenv_if_present() -> None:
+    """Load `.env` for local runs (same as bot.py). Production sets vars in the environment."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    base = Path(__file__).resolve().parent
+    for candidate in (base / ".env", base.parent / ".env"):
+        if candidate.is_file():
+            load_dotenv(candidate)
+            return
+
+
+_load_dotenv_if_present()
+
 from scan_registry import SCAN_BY_ID, SCANS
 from fetch_elite import fetch_scan_with_screener
 from discord_payload import build_embeds, post_to_webhook
