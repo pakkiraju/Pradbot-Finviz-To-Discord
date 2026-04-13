@@ -1,6 +1,6 @@
 """Post Finviz scan results to Discord — Elite (API key) version.
 
-Fully self-contained. Reads FINVIZ_API_KEY from .env in this folder.
+Fully self-contained. Reads FINVIZ_API_KEY from the environment (use Railway Variables when hosted).
 
 Usage:
   python post_scans_elite.py

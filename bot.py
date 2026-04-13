@@ -1,28 +1,141 @@
 """PradBot — Discord bot for Finviz charts and more (slash commands).
 
 Run with:  python bot.py
-Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY in .env.
+Requires DISCORD_BOT_TOKEN and FINVIZ_API_KEY from the host environment (Railway Variables).
 
 Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only (no global) so test
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
 """
+
+import logging
+import os
+import sys
+from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("pradbot")
+logger.info(
+    "deploy_meta git_branch=%s git_sha=%s",
+    os.environ.get("RAILWAY_GIT_BRANCH", ""),
+    os.environ.get("RAILWAY_GIT_COMMIT_SHA", ""),
+)
+
+
+def _norm_secret(raw: str) -> str:
+    s = raw.strip().removeprefix("\ufeff").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1].strip()
+    return s
+
+
+def _secret(*names: str) -> str:
+    """First non-empty env value among ``names`` (exact key, then case-insensitive match)."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is not None:
+            v = _norm_secret(raw)
+            if v:
+                return v
+    upper_names = {n.upper() for n in names}
+    for key, raw in os.environ.items():
+        if key.upper().replace(" ", "") in upper_names:
+            v = _norm_secret(raw)
+            if v:
+                return v
+    return ""
+
+
+def _discord_token_from_file() -> str:
+    """Optional path in ``DISCORD_BOT_TOKEN_FILE`` (Docker-style secret files)."""
+    path = os.environ.get("DISCORD_BOT_TOKEN_FILE", "").strip()
+    if not path:
+        return ""
+    try:
+        p = Path(path)
+        if p.is_file():
+            return _norm_secret(p.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    return ""
+
+
+def _railway_like_runtime() -> bool:
+    return any(k.startswith("RAILWAY_") for k in os.environ)
+
+
+def _load_dotenv_if_present() -> None:
+    """Load `.env` for local runs. Railway/production sets variables in the environment directly."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    base = Path(__file__).resolve().parent
+    for candidate in (base / ".env", base.parent / ".env"):
+        if candidate.is_file():
+            load_dotenv(candidate)
+            return
+
+
+_load_dotenv_if_present()
+
+DISCORD_BOT_TOKEN = _secret("DISCORD_BOT_TOKEN", "DISCORD_TOKEN") or _discord_token_from_file()
+if not DISCORD_BOT_TOKEN:
+    raw_dt = os.environ.get("DISCORD_BOT_TOKEN")
+    raw_alt = os.environ.get("DISCORD_TOKEN")
+    discord_key_names = [k for k in os.environ if "DISCORD" in k.upper().replace(" ", "")]
+    logger.critical(
+        "DISCORD_BOT_TOKEN not set. Local: put it in `.env` next to bot.py (or parent folder) and "
+        "`pip install python-dotenv`. Railway: add under this service → Variables, then redeploy.",
+    )
+    logger.critical(
+        "Diagnostics (no secrets): env_var_count=%s railway_env=%s "
+        "DISCORD_BOT_TOKEN_defined=%s len=%s DISCORD_TOKEN_defined=%s len=%s discord_key_names=%s",
+        len(os.environ),
+        _railway_like_runtime(),
+        "DISCORD_BOT_TOKEN" in os.environ,
+        len(_norm_secret(raw_dt)) if raw_dt is not None else -1,
+        "DISCORD_TOKEN" in os.environ,
+        len(_norm_secret(raw_alt)) if raw_alt is not None else -1,
+        discord_key_names,
+    )
+    logger.critical(
+        "Railway: apply staged Variable changes (purple = not live yet), then Deploy — not only Redeploy."
+    )
+    logger.critical(
+        "If secrets are only under Project Settings → Shared Variables, they are not injected until this service "
+        "has a reference variable, e.g. DISCORD_BOT_TOKEN=${{shared.DISCORD_BOT_TOKEN}} (see Railway Variables docs)."
+    )
+    logger.critical("env_keys_count=%s env_keys=%s", len(os.environ), sorted(os.environ.keys()))
+    sys.exit(1)
 
 import asyncio
 import io
-import logging
-import os
 import re
-import sys
 from datetime import date, datetime, timezone
-from pathlib import Path
 
 import discord
 from discord import app_commands
 
 from discord_payload import build_embeds
+from investing_econ_calendar import (
+    INVESTING_ECON_CALENDAR_URL,
+    build_investing_econ_embed_dicts,
+    calendar_today_ny,
+    calendar_week_bounds_ny,
+    fetch_economic_calendar_rows,
+)
+from ipo_calendar import (
+    IPO_CALENDAR_URL,
+    build_ipo_calendar_embed_dicts,
+    fetch_ipo_calendar_rows,
+    filter_ipo_rows_for_today,
+)
 from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
 from finviz_chart import (
     CHART_TIMEFRAME_FILE_TAG,
@@ -50,38 +163,6 @@ from finviz_inplay import (
 )
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("pradbot")
-
-# ---------------------------------------------------------------------------
-# Env
-# ---------------------------------------------------------------------------
-
-def _load_env():
-    try:
-        from dotenv import load_dotenv
-        env_path = Path(__file__).resolve().parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
-
-_load_env()
-
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-if not DISCORD_BOT_TOKEN:
-    logger.critical(
-        "DISCORD_BOT_TOKEN not set. Add it to .env in %s",
-        Path(__file__).resolve().parent,
-    )
-    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Bot setup
@@ -484,51 +565,126 @@ async def news_command(interaction: discord.Interaction, symbol: str):
 
 
 # ---------------------------------------------------------------------------
-# /econ_calendar (TradingView Economic Calendar)
+# /econ and /ipo (Investing.com + IPOScoop; period like /earnings, default today)
 # ---------------------------------------------------------------------------
 
-TRADINGVIEW_ECON_CALENDAR_URL = "https://www.tradingview.com/economic-calendar/"
+_ECON_PERIOD_CHOICES = [
+    app_commands.Choice(name="Today", value="today"),
+    app_commands.Choice(name="This week (Mon–Sun NY)", value="week"),
+]
 
-# Defaults from TradingView embed-widget-events snippet (informational only).
-ECON_CALENDAR_WIDGET_DEFAULTS = {
-    "colorTheme": "dark",
-    "isTransparent": False,
-    "locale": "en",
-    "countryFilter": "us,ca",
-    "importanceFilter": "-1,0,1",
-    "width": 400,
-    "height": 550,
-}
+_IPO_PERIOD_CHOICES = [
+    app_commands.Choice(name="Today", value="today"),
+    app_commands.Choice(name="Full calendar", value="all"),
+]
 
 
-class EconomicCalendarView(discord.ui.View):
+class InvestingEconCalendarView(discord.ui.View):
     def __init__(self, url: str):
         super().__init__(timeout=None)
         self.add_item(discord.ui.Button(label="Open Economic Calendar", url=url))
 
 
+class IPOScoopCalendarView(discord.ui.View):
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="Open IPO Calendar", url=url))
+
+
 @tree.command(
-    name="econ_calendar",
-    description="TradingView Economic Calendar (Open Economic Calendar button)",
+    name="econ",
+    description="Investing.com economic calendar (US+CA, medium/high). Default: today",
 )
-async def econ_calendar_command(interaction: discord.Interaction):
-    defaults = ECON_CALENDAR_WIDGET_DEFAULTS
-    embed = discord.Embed(
-        title="Economic Calendar",
-        url=TRADINGVIEW_ECON_CALENDAR_URL,
-        color=0x2962FF,
-        description=(
-            f"**{defaults['colorTheme']}** theme · locale `{defaults['locale']}` · "
-            f"countries **{defaults['countryFilter']}** · importance `{defaults['importanceFilter']}` · "
-            f"~{defaults['width']}×{defaults['height']}"
-        ),
+@app_commands.describe(period="Today or full week (Mon–Sun, America/New_York)")
+@app_commands.choices(period=_ECON_PERIOD_CHOICES)
+async def econ_command(interaction: discord.Interaction, period: str = "today"):
+    try:
+        await interaction.response.defer()
+    except discord.NotFound:
+        logger.warning(
+            "econ: interaction unknown/expired on defer (10062). "
+            "Stop duplicate bot processes using the same token, or try again."
+        )
+        return
+    except discord.HTTPException as e:
+        logger.warning("econ: defer failed: %s", e)
+        return
+
+    if period == "week":
+        d0, d1 = calendar_week_bounds_ny()
+        rows, err = await asyncio.to_thread(fetch_economic_calendar_rows, d0, d1)
+        embed_dicts = build_investing_econ_embed_dicts(
+            rows,
+            title_base=f"Economic Calendar (week · {d0.isoformat()}–{d1.isoformat()} NY)",
+            fetch_error=err,
+        )
+    else:
+        d = calendar_today_ny()
+        rows, err = await asyncio.to_thread(fetch_economic_calendar_rows, d, d)
+        embed_dicts = build_investing_econ_embed_dicts(
+            rows,
+            title_base=f"Economic Calendar (today · {d.isoformat()} NY)",
+            fetch_error=err,
+            empty_description="*No medium/high importance US or Canada events for today.*",
+        )
+
+    embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
+    await interaction.followup.send(embed=embeds[0], view=InvestingEconCalendarView(INVESTING_ECON_CALENDAR_URL))
+    for emb in embeds[1:]:
+        await interaction.followup.send(embed=emb)
+    logger.info("econ period=%s for %s (%d rows, %d embeds)", period, interaction.user, len(rows), len(embeds))
+
+
+@tree.command(
+    name="ipo",
+    description="IPOScoop IPO calendar (no SCOOP columns). Default: today (US Eastern)",
+)
+@app_commands.describe(period="Today only or full table from IPOScoop")
+@app_commands.choices(period=_IPO_PERIOD_CHOICES)
+async def ipo_command(interaction: discord.Interaction, period: str = "today"):
+    try:
+        await interaction.response.defer()
+    except discord.NotFound:
+        logger.warning(
+            "ipo: interaction unknown/expired on defer (10062). "
+            "Stop duplicate bot processes using the same token, or try again."
+        )
+        return
+    except discord.HTTPException as e:
+        logger.warning("ipo: defer failed: %s", e)
+        return
+
+    rows = await asyncio.to_thread(fetch_ipo_calendar_rows)
+    today_rows: list[dict[str, str]] = []  # filled when period is today and fetch non-empty
+
+    if period == "all":
+        embed_dicts = build_ipo_calendar_embed_dicts(rows)
+    elif not rows:
+        embed_dicts = build_ipo_calendar_embed_dicts([])
+    else:
+        today_rows = filter_ipo_rows_for_today(rows)
+        if not today_rows:
+            embed_dicts = build_ipo_calendar_embed_dicts(
+                [],
+                title_base="IPO — today",
+                empty_description="*No IPOs listed for today's date on IPOScoop.*",
+            )
+        else:
+            embed_dicts = build_ipo_calendar_embed_dicts(today_rows, title_base="IPO — today")
+
+    embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
+    await interaction.followup.send(embed=embeds[0], view=IPOScoopCalendarView(IPO_CALENDAR_URL))
+    for emb in embeds[1:]:
+        await interaction.followup.send(embed=emb)
+    shown = len(rows) if period == "all" else len(today_rows)
+    logger.info(
+        "ipo period=%s for %s (%d shown / %d fetched, %d embeds)",
+        period,
+        interaction.user,
+        shown,
+        len(rows),
+        len(embeds),
     )
-    embed.set_footer(text="Economic Calendar by TradingView")
-    await interaction.response.send_message(
-        embed=embed,
-        view=EconomicCalendarView(TRADINGVIEW_ECON_CALENDAR_URL),
-    )
-    logger.info("econ_calendar for %s", interaction.user)
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +799,7 @@ async def purge_command(interaction: discord.Interaction, amount: str):
 async def scans_command(interaction: discord.Interaction, scan: app_commands.Choice[str]):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/scans`.",
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/scans`.",
             ephemeral=True,
         )
         return
@@ -771,7 +927,7 @@ async def top_gainers_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/top_gainers`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/top_gainers`.", ephemeral=True
         )
         return
 
@@ -796,7 +952,7 @@ async def top_losers_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/top_losers`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/top_losers`.", ephemeral=True
         )
         return
 
@@ -829,7 +985,7 @@ async def inplay_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/inplay`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/inplay`.", ephemeral=True
         )
         return
 
@@ -878,7 +1034,7 @@ async def earnings_command(
 ):
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/earnings`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/earnings`.", ephemeral=True
         )
         return
 
@@ -913,7 +1069,7 @@ async def _run_heatmap_command(
     """FinViz-style nested treemap (v=152 export; slow)."""
     if not os.environ.get("FINVIZ_API_KEY", "").strip():
         await interaction.response.send_message(
-            "Set **FINVIZ_API_KEY** in `.env` to use `/heatmap`.", ephemeral=True
+            "Set **FINVIZ_API_KEY** in Railway Variables to use `/heatmap`.", ephemeral=True
         )
         return
 
@@ -1407,10 +1563,13 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         logger.exception("Unhandled slash command error: %s", error)
         msg = "Something went wrong. Please try again later."
 
-    if interaction.response.is_done():
-        await interaction.followup.send(msg, ephemeral=True)
-    else:
-        await interaction.response.send_message(msg, ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except (discord.HTTPException, discord.NotFound) as send_err:
+        logger.warning("Could not send slash error reply (interaction may be invalid): %s", send_err)
 
 
 # ---------------------------------------------------------------------------

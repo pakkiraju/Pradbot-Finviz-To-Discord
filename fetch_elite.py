@@ -1,6 +1,6 @@
 """Fetch scan data via FinViz Elite — fully self-contained.
 
-Reads FINVIZ_API_KEY from .env in this folder. Fetches CSV directly from
+Reads FINVIZ_API_KEY from the process environment (Railway Variables). Fetches CSV directly from
 elite.finviz.com/export.ashx with auth= query param. No dependency on the
 Market Metrics Dashboard codebase.
 """
@@ -17,7 +17,6 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_ENV_LOADED = False
 _MAX_RETRIES = 4
 _DELAY_SEC = float(os.environ.get("FINVIZ_ELITE_DELAY_SEC", "1.5"))
 
@@ -30,22 +29,7 @@ _HEADERS = {
 }
 
 
-def _load_env():
-    global _ENV_LOADED
-    if _ENV_LOADED:
-        return
-    try:
-        from dotenv import load_dotenv
-        env_path = Path(__file__).resolve().parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
-    _ENV_LOADED = True
-
-
 def _get_api_key() -> str | None:
-    _load_env()
     key = os.environ.get("FINVIZ_API_KEY", "").strip()
     return key or None
 
@@ -88,7 +72,7 @@ def fetch_csv_export(url: str, caller: str = "", timeout: int = 30) -> list[dict
     text = resp.text.strip().lstrip("\ufeff")
     if text.startswith("<"):
         if "login" in text[:2000].lower() or "sign in" in text[:2000].lower():
-            logger.error("[%s] FinViz returned login page — check FINVIZ_API_KEY in .env", caller)
+            logger.error("[%s] FinViz returned login page — check FINVIZ_API_KEY in Railway Variables", caller)
         else:
             logger.warning("[%s] got HTML instead of CSV", caller)
         return []
@@ -209,11 +193,7 @@ def fetch_scan(scan_def) -> list[dict]:
 
     api_key = _get_api_key()
     if not api_key:
-        logger.error(
-            "FINVIZ_API_KEY not set. Create a .env file in %s with:\n"
-            "  FINVIZ_API_KEY=your_key_here",
-            Path(__file__).resolve().parent,
-        )
+        logger.error("FINVIZ_API_KEY not set. Add FINVIZ_API_KEY in Railway → service → Variables.")
         return []
 
     rows: list[dict] = []
@@ -268,7 +248,7 @@ def _movers_volume_csv_to_shares(raw) -> float | None:
 
     Elite screener exports often list **daily volume in thousands** (e.g. cell 1500 = 1.5M shares).
     Users pass *min_volume* in **actual shares** (e.g. 1_000_000). Set
-    FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares in .env if your export already uses full shares.
+    FINVIZ_MOVERS_VOLUME_CSV_UNIT=shares in Railway Variables if your export already uses full shares.
     """
     n = _parse_num(raw)
     if n is None:

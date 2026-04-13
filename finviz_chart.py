@@ -9,13 +9,11 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-_ENV_LOADED = False
 _MAX_RETRIES = 4
 
 _HEADERS = {
@@ -69,22 +67,7 @@ CHART_TIMEFRAME_FILE_TAG: dict[str, str] = {
 }
 
 
-def _load_env():
-    global _ENV_LOADED
-    if _ENV_LOADED:
-        return
-    try:
-        from dotenv import load_dotenv
-        env_path = Path(__file__).resolve().parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path)
-    except ImportError:
-        pass
-    _ENV_LOADED = True
-
-
 def _get_api_key() -> str | None:
-    _load_env()
     key = os.environ.get("FINVIZ_API_KEY", "").strip()
     return key or None
 
@@ -160,11 +143,7 @@ def fetch_chart(symbol: str, timeframe: str = "d") -> bytes | None:
     """
     api_key = _get_api_key()
     if not api_key:
-        logger.error(
-            "FINVIZ_API_KEY not set. Create a .env file in %s with:\n"
-            "  FINVIZ_API_KEY=your_key_here",
-            Path(__file__).resolve().parent,
-        )
+        logger.error("FINVIZ_API_KEY not set. Add it in Railway → service → Variables.")
         return None
 
     url = build_chart_url(symbol, timeframe)
