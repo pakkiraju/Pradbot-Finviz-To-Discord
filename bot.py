@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote). /help lists commands and links README_URL when set.
 """
 
 import logging
@@ -320,6 +320,87 @@ async def on_ready():
         os.environ.get("RAILWAY_GIT_COMMIT_SHA", ""),
     )
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
+
+
+def _readme_doc_url() -> str:
+    """Public GitHub README (or docs) URL for /help — set README_URL in the host environment."""
+    for key in ("README_URL", "GITHUB_README_URL", "DOCS_URL"):
+        v = os.environ.get(key, "").strip()
+        if v:
+            return v
+    return ""
+
+
+def _help_embed() -> discord.Embed:
+    doc = _readme_doc_url()
+    desc_parts = [
+        "Short reference for this bot. Commands that use **FinViz Elite** need **`FINVIZ_API_KEY`** in the host "
+        "environment. **`/inplay`** with **scanner: Earnings** also needs **`MASSIVE_API_KEY`** (or "
+        "**`POLYGON_API_KEY`**).",
+    ]
+    if doc:
+        desc_parts.append(f"\n**[Full documentation (README) ↗]({doc})** — setup, examples, slash reference, troubleshooting.")
+    else:
+        desc_parts.append(
+            "\n*To show a link to your repo README here, set **`README_URL`** (or **`GITHUB_README_URL`**) on the bot host.*"
+        )
+    embed = discord.Embed(
+        title="PradBot — commands",
+        description="".join(desc_parts),
+        color=0x06B6D4,
+    )
+    if doc:
+        embed.url = doc
+    embed.add_field(
+        name="Charts, options, news",
+        value=(
+            "`/chart` — `symbol` · optional **timeframe** (intraday 1m–1h or D / W / M)\n"
+            "`/quote` — `symbol` (chart + OHLCV + news)\n"
+            "`/gex` — `symbol` · optional **expiry**\n"
+            "`/zerodte` — `symbol`\n"
+            "`/news` — `symbol`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Scans & movers",
+        value=(
+            "`/scans` — **scan** (all presets or one)\n"
+            "`/top_gainers` — optional **min_price**, **min_volume**\n"
+            "`/top_losers` — optional **min_price**, **min_volume**\n"
+            "`/top_opps` — `symbol` (multi-timeframe charts + snapshot)"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Screens (FinViz Elite)",
+        value=(
+            "`/inplay` — optional **scanner**: Default · Small caps · **Earnings** (%EAVOL; needs Massive key)\n"
+            "`/earnings` — **period**: Today · Weekly\n"
+            "`/heatmap` — **universe** (S&P 500, NASDAQ 100, Dow, Russell 2000)"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Calendars & utilities",
+        value=(
+            "`/econ` — **period**: Today · This week (no FinViz key)\n"
+            "`/ipo` — **period**: Today · Full calendar (no FinViz key)\n"
+            "`/evsize` — trade EV grade + Kelly sizing (see README for parameters)\n"
+            "`/purge` — **amount** (count or **all**; needs Manage Messages)"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Use /help anytime · PradBot")
+    return embed
+
+
+@tree.command(
+    name="help",
+    description="List all slash commands, short usage, and link to the GitHub README (set README_URL on the host)",
+)
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=_help_embed())
 
 
 # ---------------------------------------------------------------------------

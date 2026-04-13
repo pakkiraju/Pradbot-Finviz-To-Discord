@@ -45,6 +45,7 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/heatmap` | **Nested treemap** by index universe (S&P 500 default); slow full-export pull |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
+| `/help` | Lists slash commands + short usage; link to full **README** when **`README_URL`** is set on the host |
 
 Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/inplay`** with **`scanner: Earnings`** also needs **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**) for Massive’s REST API. **`/purge`**, **`/evsize`**, **`/econ`**, and **`/ipo`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
 
@@ -69,6 +70,7 @@ Put these in `.env`:
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
 - **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`**, **`/evsize`**, **`/econ`** and **`/ipo`** (the bot still needs the Discord token to start).
 - **`MASSIVE_API_KEY`** — required only for **`/inplay`** with **`scanner: Earnings`** (extended-hours volume vs 21-day avg via [Massive](https://massive.com) REST). You can use **`POLYGON_API_KEY`** instead (same token after Polygon → Massive rebrand).
+- **`README_URL`** (optional) — Public URL to your repo **README** (e.g. `https://github.com/org/repo#readme`). Used by **`/help`** so users can open full documentation. In **`.env`**, wrap the value in **quotes** if it contains `#`, or parsers may treat `#readme` as a comment. Aliases: **`GITHUB_README_URL`**, **`DOCS_URL`**.
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
@@ -159,11 +161,13 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/heatmap [universe]` | Nested performance treemap: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000**; needs `FINVIZ_API_KEY` |
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk> [kelly_fraction]` | EV grade (A+ … D) + Kelly-based sizing: **¼ / ½ / full** Kelly of full Kelly (default **½**); ephemeral reply |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
+| `/help` | Command list + README link (set **`README_URL`** on the host) |
 | `/scans <scan>` | **All scans** or one preset (**Included Scans**); needs `FINVIZ_API_KEY` |
 
 **Examples:**
 
 ```
+/help
 /chart symbol:AAPL
 /chart symbol:MSFT timeframe:Weekly
 /chart symbol:SPY timeframe:5 minute
@@ -195,6 +199,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /scans scan:all
 /scans scan:jeff_sun_canslim
 ```
+
+**What `/help` shows:** Embeds a **compact command list** (grouped by category) and a **link to the full README** when **`README_URL`** (or **`GITHUB_README_URL`** / **`DOCS_URL`**) is set on the bot host (e.g. Railway Variables). No FinViz key required.
 
 **What `/chart` shows:** Downloads a **candlestick PNG** from **`elite.finviz.com/chart.ashx`** (`ty=c`, `ta=1`, `s=l`) with **`p=`** set from the timeframe: **1 / 3 / 5 / 15 / 30 minute** (`i1`–`i30`), **1 hour** (`h`), **Daily / Weekly / Monthly** (`d` / `w` / `m`). Default is **Daily**. Intraday charts need **FinViz Elite** (real-time / extended-hours behavior per FinViz). Requires `FINVIZ_API_KEY`.
 
