@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns). /econ_calendar posts an embed + Open Economic Calendar button (TradingView). /ipo fetches IPOScoop IPO calendar table (8 columns; no SCOOP rating columns). /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote).
 """
 
 import logging
@@ -107,6 +107,7 @@ import discord
 from discord import app_commands
 
 from discord_payload import build_embeds
+from ipo_calendar import IPO_CALENDAR_URL, build_ipo_calendar_embed_dicts, fetch_ipo_calendar_rows
 from fetch_elite import fetch_scan, fetch_scan_with_screener, fetch_top_movers
 from finviz_chart import (
     CHART_TIMEFRAME_FILE_TAG,
@@ -581,6 +582,32 @@ async def econ_calendar_command(interaction: discord.Interaction):
         view=EconomicCalendarView(TRADINGVIEW_ECON_CALENDAR_URL),
     )
     logger.info("econ_calendar for %s", interaction.user)
+
+
+# ---------------------------------------------------------------------------
+# /ipo (IPOScoop IPO calendar)
+# ---------------------------------------------------------------------------
+
+
+class IPOScoopCalendarView(discord.ui.View):
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(label="Open IPO Calendar", url=url))
+
+
+@tree.command(
+    name="ipo",
+    description="IPOScoop upcoming IPO calendar (public table; no SCOOP rating columns)",
+)
+async def ipo_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+    rows = await asyncio.to_thread(fetch_ipo_calendar_rows)
+    embed_dicts = build_ipo_calendar_embed_dicts(rows)
+    embeds = [_webhook_embed_dict_to_discord(d) for d in embed_dicts]
+    await interaction.followup.send(embed=embeds[0], view=IPOScoopCalendarView(IPO_CALENDAR_URL))
+    for emb in embeds[1:]:
+        await interaction.followup.send(embed=emb)
+    logger.info("ipo for %s (%d rows, %d embeds)", interaction.user, len(rows), len(embeds))
 
 
 # ---------------------------------------------------------------------------

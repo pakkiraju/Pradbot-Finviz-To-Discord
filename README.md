@@ -12,6 +12,7 @@ This repository ships **two** standalone products that live in the same folder a
 ### Recent changes (at a glance)
 
 - **`/econ_calendar`** — TradingView **Economic Calendar**: embed + **Open Economic Calendar** button. No FinViz key.
+- **`/ipo`** — [IPOScoop](https://www.iposcoop.com/ipo-calendar/) **IPO Calendar** table (company, symbol, lead managers, shares, price range, est. volume, expected trade); embed + **Open IPO Calendar** button. Omits SCOOP rating columns. No FinViz key.
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener; footer notes delayed quotes.
 - **`/heatmap`** — **Nested treemap** from FinViz **v=152** full export (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
 - **`/inplay`** — FinViz Elite **In play** screener (default): **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**; table with **`[news](…)`** per row (**v=152** export; screener **v=151**). Optional **`scanner: Small caps`**: market cap **$5M–$2B**, current vol **>1M**, rel vol **>1.5**; embed links the **v=152** screener (same columns as export); wider table with country, market cap, **float** (K/M/B), short float, and **`[news](…)`** per row from the **News URL** column (fallback: quote news tab).
@@ -34,6 +35,7 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/zerodte AAPL` | **0DTE** OI-style analysis |
 | `/news AAPL` | Latest **5** news links |
 | `/econ_calendar` | **TradingView** Economic Calendar — embed + **Open Economic Calendar** button |
+| `/ipo` | **IPOScoop** IPO calendar — monospace table + **Open IPO Calendar** button |
 | `/quote AAPL` | Chart + OHLCV + change + recent days + headlines |
 | `/scans` | **All scans** or **one** preset (FinViz Elite CSV + same embed style as Elite webhook poster) |
 | `/top_gainers` | Today's **top 10 gaining** stocks by change %; optional price/volume filters |
@@ -44,7 +46,7 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
 
-Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`**, **`/evsize`**, and **`/econ_calendar`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
+Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/purge`**, **`/evsize`**, **`/econ_calendar`**, and **`/ipo`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
 
 ### PradBot — setup
 
@@ -65,7 +67,7 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`**, **`/evsize`**, and **`/econ_calendar`** (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`**, **`/evsize`**, **`/econ_calendar`**, and **`/ipo`** (the bot still needs the Discord token to start).
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
 #### 3) Discord application (you are the app owner)
@@ -147,6 +149,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/zerodte <symbol>` | 0DTE analysis |
 | `/news <symbol>` | 5 articles with links |
 | `/econ_calendar` | TradingView **Economic Calendar**: embed + **Open Economic Calendar** button; no `FINVIZ_API_KEY` |
+| `/ipo` | [IPOScoop](https://www.iposcoop.com/ipo-calendar/) IPO calendar table (public columns only; no SCOOP rating columns); no `FINVIZ_API_KEY` |
 | `/quote <symbol>` | Quote panel + chart + news |
 | `/top_gainers [min_price] [min_volume]` | Top 10 gainers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
 | `/top_losers [min_price] [min_volume]` | Top 10 losers today; optional price/volume floor; needs `FINVIZ_API_KEY` |
@@ -168,6 +171,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /zerodte symbol:SPY
 /news symbol:TSLA
 /econ_calendar
+/ipo
 /quote symbol:MSFT
 /purge amount:10
 /purge amount:all
@@ -207,6 +211,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 **What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Optional **`kelly_fraction`:** **Quarter**, **Half** (default), or **Full** Kelly — i.e. that fraction of the **full Kelly** share of the daily budget, then **capped at 50%** of the daily budget per trade. Computes R, L, R:L, EV/share, EV/R, and suggested dollar risk and share count. Grades **A+ through D** from EV/R. Reply is **ephemeral**. No FinViz key needed. Educational tool, not financial advice.
 
 **What `/econ_calendar` shows:** A **rich embed** for [TradingView Economic Calendar](https://www.tradingview.com/economic-calendar/) with an **Open Economic Calendar** button and a short summary of the default preset (theme, locale, countries, importance, size). No `FINVIZ_API_KEY`.
+
+**What `/ipo` shows:** Fetches the [IPOScoop IPO Calendar](https://www.iposcoop.com/ipo-calendar/) HTML table and posts it as a monospace embed (chunked if long): company, symbol, lead managers, shares (millions), price low/high, est. dollar volume, expected trade date. **SCOOP Rating** and **Rating Change** columns are omitted. **Open IPO Calendar** button links to the same page. Implemented in **`ipo_calendar.py`** (uses **`beautifulsoup4`**). No `FINVIZ_API_KEY`.
 
 **What `/news` / `/quote` show:** Headlines and links (news); combined panel with chart, OHLCV, recent days, and headlines (quote).
 
