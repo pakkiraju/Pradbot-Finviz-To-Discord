@@ -99,6 +99,22 @@ def fetch_daily_bars(
     return _collect_results(first, caller=caller)
 
 
+def fetch_aggregate_bars(
+    ticker: str,
+    multiplier: int,
+    timespan: str,
+    from_spec: str | int,
+    to_spec: str | int,
+    *,
+    caller: str = "massive_aggs",
+) -> list[dict[str, Any]]:
+    """OHLCV aggregates. *from_spec* / *to_spec*: Unix **ms** (int) for minute/hour, or **YYYY-MM-DD** for day."""
+    path = f"/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from_spec}/{to_spec}"
+    q = urlencode({"adjusted": "true", "sort": "asc", "limit": "50000"})
+    first = f"{MASSIVE_BASE}{path}?{q}"
+    return _collect_results(first, caller=caller)
+
+
 def fetch_minute_bars(
     ticker: str,
     from_ms: int,
@@ -107,10 +123,29 @@ def fetch_minute_bars(
     caller: str = "massive_minute",
 ) -> list[dict[str, Any]]:
     """Minute OHLCV bars from *from_ms* to *to_ms* (Unix ms), ascending."""
-    path = f"/v2/aggs/ticker/{ticker}/range/1/minute/{from_ms}/{to_ms}"
-    q = urlencode({"adjusted": "true", "sort": "asc", "limit": "50000"})
-    first = f"{MASSIVE_BASE}{path}?{q}"
-    return _collect_results(first, caller=caller)
+    return fetch_aggregate_bars(ticker, 1, "minute", from_ms, to_ms, caller=caller)
+
+
+def fetch_five_minute_bars(
+    ticker: str,
+    from_ms: int,
+    to_ms: int,
+    *,
+    caller: str = "massive_5m",
+) -> list[dict[str, Any]]:
+    """5-minute OHLCV bars (Unix ms range)."""
+    return fetch_aggregate_bars(ticker, 5, "minute", from_ms, to_ms, caller=caller)
+
+
+def fetch_hour_bars(
+    ticker: str,
+    from_ms: int,
+    to_ms: int,
+    *,
+    caller: str = "massive_hour",
+) -> list[dict[str, Any]]:
+    """Hourly OHLCV bars (Unix ms range)."""
+    return fetch_aggregate_bars(ticker, 1, "hour", from_ms, to_ms, caller=caller)
 
 
 def sum_minute_volume(ticker: str, start_ms: int, end_ms: int, *, caller: str) -> float:

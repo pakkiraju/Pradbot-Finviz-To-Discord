@@ -5,5 +5,6 @@ finviz>=2.0.0
 discord.py>=2.3
 pandas>=2.0
 matplotlib>=3.8
+mplfinance>=0.12
 numpy>=1.24
 squarify>=0.4.0

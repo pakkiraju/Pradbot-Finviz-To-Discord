@@ -15,6 +15,7 @@ This repository ships **two** standalone products that live in the same folder a
 - **`/ipo`** — [IPOScoop](https://www.iposcoop.com/ipo-calendar/) IPO table (compact labeled lines; no SCOOP columns). **`period`:** **Today** (default) or **Full calendar**. No FinViz key.
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; monospace tables (ticker, **time** with BMO/AMC-style text from FinViz, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener.
 - **`/heatmap`** — **Nested treemap** from FinViz **v=152** full export (sector → industry → stocks; size = market cap, color = change %). **Universe** dropdown only: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000** (stocks and ETFs in that index column). Can take **1–3 minutes** (large CSV).
+- **`/top_opps`** — **Four** FinViz-style timeframes (**1m, 5m, 1h, daily**) as chart PNGs **plus** a **v=152** quote snapshot (same idea as `/quote`). **Default** (no levels): pulls charts from **FinViz** (`FINVIZ_API_KEY`). **Execution study** (optional **entry** + **stop**; **exit** optional): builds **Massive** OHLC charts with **mplfinance** — **dark** theme, **9/21 EMA**, **50/100/200 SMA**, **VWAP** on **1m/5m/1h** only, horizontal **entry / stop / exit** lines; intraday charts use **today’s regular session (ET)** (extended history only warms MAs). **Exit** omitted → default target = last **regular-session ~4pm ET** close from minute aggregates. Embed lines: **R:R**, **EV/Share** (at 50% probability), **Side: Long/Short**. Requires **`MASSIVE_API_KEY`** or **`POLYGON_API_KEY`** for study mode.
 - **`/inplay`** — FinViz Elite **In play** screener (default): **news today or yesterday**, price **>$1**, avg vol **>1M**, current vol **>500K**, relative vol **>1.5**, sorted by **change %**; table with **`[news](…)`** per row (**v=152** export; screener **v=151**). Optional **`scanner: Small caps`**: market cap **$5M–$2B**, current vol **>1M**, rel vol **>1.5**; embed links the **v=152** screener (same columns as export); wider table with country, market cap, **float** (K/M/B), short float, and **`[news](…)`** per row from the **News URL** column (fallback: quote news tab). Optional **`scanner: Earnings`**: FinViz filter **earnings yesterday AMC | today BMO** plus **avg vol >1M** and **price >$1**; **[Massive](https://massive.com)** REST (`MASSIVE_API_KEY`) computes **%EAVOL** = (prior session after-hours + current session pre-market volume) / **21-day average daily volume**, sorted high→low; **bold** = **≥ 20%**; needs **`FINVIZ_API_KEY`** + **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**).
 - **Slash sync** — **`GUILD_ID`** accepts **comma-separated** IDs for instant guild registration; **default when `GUILD_ID` is set** is **guild-only** (no duplicate slash lines). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** for **guild + global** (other servers within ~1 hour; test guild may briefly show duplicates). **`SLASH_CLEAR_GLOBAL_FOR_DEDUPE`** clears stale globals when not using global sync (see **§5**).
 - **`top_gainers` / `top_losers`** — Registered in **`scan_registry.py`** (`ta_topgainers` / `ta_toplosers`); **`fetch_scan_with_screener`** supplies **v=152** screener URLs for embeds. Webhook posters and **`/scans`** share the same pipeline; slash movers are top **10** with optional filters; batch presets cap at **50** rows (**Included Scans**).
@@ -43,11 +44,12 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/earnings` | **Today** or **this week** earnings table (FinViz Elite); time, price, volumes, change % |
 | `/inplay` | **In play** (default): news + liquidity + rel vol; **`[news](url)`** per row. Optional **Small caps**: cap $5M–$2B, vol + rel vol; **v=152** screener link; extra float/cap columns + **`[news](url)`**. Optional **Earnings**: AMC/BMO screen + **%EAVOL** via Massive (**`MASSIVE_API_KEY`**) |
 | `/heatmap` | **Nested treemap** by index universe (S&P 500 default); slow full-export pull |
+| `/top_opps` | **1m / 5m / 1h / daily** charts + snapshot; optional **entry**+**stop** (and optional **exit**) for **Massive** execution-study PNGs with levels & MAs |
 | `/evsize` | **EV grade** + **position sizing** for a trade (entry, target, stop, win prob, daily risk budget) |
 | `/purge` | Delete messages (count or **all**, buttons for **all**) |
 | `/help` | Lists slash commands + short usage; link to full **README** when **`README_URL`** is set on the host |
 
-Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/inplay`** with **`scanner: Earnings`** also needs **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**) for Massive’s REST API. **`/purge`**, **`/evsize`**, **`/econ`**, and **`/ipo`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
+Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**) is required for **`/inplay`** with **`scanner: Earnings`** and for **`/top_opps`** **execution study** mode (entry + stop). **`/purge`**, **`/evsize`**, **`/econ`**, and **`/ipo`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
 
 ### PradBot — setup
 
@@ -69,7 +71,7 @@ Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
 - **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`**, **`/evsize`**, **`/econ`** and **`/ipo`** (the bot still needs the Discord token to start).
-- **`MASSIVE_API_KEY`** — required only for **`/inplay`** with **`scanner: Earnings`** (extended-hours volume vs 21-day avg via [Massive](https://massive.com) REST). You can use **`POLYGON_API_KEY`** instead (same token after Polygon → Massive rebrand).
+- **`MASSIVE_API_KEY`** — required for **`/inplay`** with **`scanner: Earnings`** (extended-hours volume vs 21-day avg) and for **`/top_opps`** when you pass **entry** + **stop** (Massive aggregates + **mplfinance** charts). [Massive](https://massive.com) REST (`api.massive.com`). You can use **`POLYGON_API_KEY`** instead (same token after Polygon → Massive rebrand).
 - **`README_URL`** (optional) — Public URL to your repo **README** (e.g. `https://github.com/org/repo#readme`). Used by **`/help`** so users can open full documentation. In **`.env`**, wrap the value in **quotes** if it contains `#`, or parsers may treat `#readme` as a comment. Aliases: **`GITHUB_README_URL`**, **`DOCS_URL`**.
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
 
@@ -159,6 +161,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/earnings [period]` | **Today** or **Weekly** earnings from FinViz Elite (**v=152**); monospace table: time (incl. BMO/AMC text), price, volume, avg vol, change %; needs `FINVIZ_API_KEY` |
 | `/inplay [scanner]` | **In play** — **Default:** news today/yesterday, price >$1, avg vol >1M, vol >500K, rel vol >1.5; **`[news](url)`** per row; screener **v=151**. **Small caps:** cap $5M–$2B, cur vol >1M, rel vol >1.5; **v=152** screener; country, MCap, float (K/M/B), short %, **`[news](url)`**. **Earnings:** AMC/BMO + liquidity filters; table Symbol, Price, Change, Vol, **%EAVOL**; needs `FINVIZ_API_KEY` + `MASSIVE_API_KEY` (or `POLYGON_API_KEY`) |
 | `/heatmap [universe]` | Nested performance treemap: **S&P 500** (default), **NASDAQ 100**, **Dow**, **Russell 2000**; needs `FINVIZ_API_KEY` |
+| `/top_opps <symbol> [entry] [stop] [exit]` | Four charts (1m/5m/1h/d) + snapshot. **No levels:** FinViz PNGs. **Entry + stop:** Massive study charts (`MASSIVE_API_KEY`); **exit** optional (defaults to last RTH ~4pm ET close) |
 | `/evsize <side> <entry> <target> <stop> <probability> <daily_risk> [kelly_fraction]` | EV grade (A+ … D) + Kelly-based sizing: **¼ / ½ / full** Kelly of full Kelly (default **½**); ephemeral reply |
 | `/purge <amount>` | Purge count or **all** (buttons for **all**); needs Manage Messages |
 | `/help` | Command list + README link (set **`README_URL`** on the host) |
@@ -196,6 +199,9 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 /earnings period:Weekly (this week)
 /heatmap
 /heatmap universe:NASDAQ 100
+/top_opps symbol:SNDK
+/top_opps symbol:AAPL entry:185.50 stop:182.00
+/top_opps symbol:AAPL entry:185.50 stop:182.00 exit:195.00
 /scans scan:all
 /scans scan:jeff_sun_canslim
 ```
@@ -217,6 +223,8 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 **What `/inplay` shows:** **Default** (`scanner` omitted or **Default**): FinViz filters **news today|yesterday**, **sh_avgvol_o1000** (avg vol >1M), **sh_curvol_o500** (>500K current volume), **sh_price_o1** (>$1), **sh_relvol_o1.5** (rel vol >1.5), ordered by **change %** (descending). **v=152** Elite export (full columns so **News URL** is present); embed **URL** is the **v=151** screener. Up to **20** rows (Symbol, Price, Change, Vol, News) with **`[news](…)`** links; missing **News URL** falls back to the quote **news** tab. **Small caps** (`scanner: Small caps`): **`cap_0.005to2,sh_curvol_o1000,sh_relvol_o1.5`** — market cap **$5M–$2B**, current vol **>1M**, rel vol **>1.5**. Same **v=152** Elite export; embed **title URL** opens the **v=152** screener (with the same custom column set as the export). Table: **Country**, **MCap**, **Float** (K/M/B), **Shrt%**, and **`[news](…)`** using **News URL** when present (else quote **news** tab). **Earnings** (`scanner: Earnings`): FinViz **`earningsdate_yesterdayafter|todaybefore,sh_avgvol_o1000,sh_price_o1`** — embed links the **v=151** screener; CSV from **v=152** export. **[Massive](https://massive.com)** REST (`https://api.massive.com`, Bearer token) loads minute bars for **prior session 16:00–20:00 ET** and **current session 04:00–09:30 ET**, daily bars for **21-trading-day average volume**, and **%EAVOL** = (AH + PM) / that average × 100. All matching symbols are listed, sorted by **%EAVOL** (descending); **bold** values are **≥ 20%**. Volume column uses **full-share** integers from the v=152 CSV when the cell is all digits (avoids FinViz thousands mis-reads). Requires **`FINVIZ_API_KEY`** and **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**).
 
 **What `/heatmap` shows:** One or more **PNG** treemap images built from a **v=152** full-universe export, filtered to tickers whose **Index** column matches the chosen benchmark. Embed describes size/color, **as-of** date, and links the FinViz screener. First run can take **1–3 minutes**; increase **`FINVIZ_V152_EXPORT_TIMEOUT_SEC`** if the HTTP fetch times out. Requires `FINVIZ_API_KEY`.
+
+**What `/top_opps` shows:** Posts **four** chart images (**1 minute**, **5 minute**, **1 hour**, **daily**) and a **snapshot** embed (OHLCV, change, gap, float, news — same style as `/quote`). **Without** optional prices: downloads PNGs from FinViz **`chart.ashx`** for each timeframe (needs **`FINVIZ_API_KEY`**). **With** **entry** and **stop** (execution **study** mode): requires **`MASSIVE_API_KEY`** or **`POLYGON_API_KEY`**. Fetches aggregates from [Massive](https://massive.com) REST (`massive_rest.py`), renders candlesticks with **mplfinance** (`top_opps_charts.py`): **nightclouds**-style dark theme; overlays **EMA 9**, **EMA 21**, **SMA 50/100/200**; **session VWAP** on **1m/5m/1h** only (not daily). Intraday panels show **today’s session in US Eastern** (prior days in the fetch are used only to stabilize moving averages). **exit** (target) is optional — if omitted, the bot uses the last **regular-session** close (~**4:00pm ET**) from **1-minute** bars as the default exit for levels, R:R, and EV. Chart header includes symbol, timeframe, % change (from quote), last price, volume, and **as-of** time in **ET**; per-chart embed text includes **Entry / Stop / Exit**, **R:R**, **EV/Share=… (at 50% probability)** (expected value per share if win and loss each have 50% weight), and **Side: Long / Short / Mixed** from level ordering. Command description is limited to **100** characters (Discord API).
 
 **What `/evsize` shows:** Takes **long/short**, **entry/target/stop**, **win probability** (0–100), and **daily risk budget** ($). Optional **`kelly_fraction`:** **Quarter**, **Half** (default), or **Full** Kelly — i.e. that fraction of the **full Kelly** share of the daily budget, then **capped at 50%** of the daily budget per trade. Computes R, L, R:L, EV/share, EV/R, and suggested dollar risk and share count. Grades **A+ through D** from EV/R. Reply is **ephemeral**. No FinViz key needed. Educational tool, not financial advice.
 
@@ -373,6 +381,7 @@ PradBot-Finviz-To-Discord/
   finviz_earnings.py
   finviz_inplay.py
   inplay_earnings.py   # /inplay scanner:Earnings (FinViz + Massive %EAVOL)
+  top_opps_charts.py   # /top_opps execution study (Massive + mplfinance PNGs)
   massive_rest.py      # Massive.com REST aggregates (no WebSockets)
   finviz_options.py
   finviz_news.py
@@ -404,6 +413,10 @@ PradBot-Finviz-To-Discord/
 **PradBot — `/heatmap` times out or returns HTML** — Increase `FINVIZ_V152_EXPORT_TIMEOUT_SEC` (e.g. **300**). Confirm Elite auth and stable network; the v=152 export is a single large CSV.
 
 **PradBot — `/inplay` Earnings asks for Massive** — Set **`MASSIVE_API_KEY`** or **`POLYGON_API_KEY`** in `.env` / Railway (same token works on `api.massive.com`).
+
+**PradBot — `/top_opps` with entry/stop asks for Massive** — Study charts need **`MASSIVE_API_KEY`** or **`POLYGON_API_KEY`**. Omit entry/stop to use default FinViz-only charts.
+
+**PradBot — `/top_opps` command sync fails (HTTP 400)** — Slash **command `description`** must be **≤ 100 characters** (Discord). Shorten the string in `bot.py` if you edit it.
 
 **PradBot — chart / FinViz errors** — Confirm Elite subscription and `FINVIZ_API_KEY`.
 

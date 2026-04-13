@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote). /help lists commands and links README_URL when set.
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (exit defaults to ~4pm ET RTH close if omitted) uses Massive OHLC charts with level lines. /help lists commands and links README_URL when set.
 """
 
 import logging
@@ -163,6 +163,7 @@ from finviz_inplay import (
 )
 from inplay_earnings import fetch_inplay_earnings_rows, format_inplay_earnings_description
 from massive_rest import get_massive_api_key
+from top_opps_charts import build_study_charts, default_exit_rth_close_et, format_study_embed_lines
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -368,7 +369,7 @@ def _help_embed() -> discord.Embed:
             "`/scans` — **scan** (all presets or one)\n"
             "`/top_gainers` — optional **min_price**, **min_volume**\n"
             "`/top_losers` — optional **min_price**, **min_volume**\n"
-            "`/top_opps` — `symbol` (multi-timeframe charts + snapshot)"
+            "`/top_opps` — `symbol` · optional **entry**, **stop**, **exit** (exit defaults to RTH ~4pm ET if omitted)"
         ),
         inline=False,
     )
@@ -1348,42 +1349,118 @@ _TOP_OPPS_TIMEFRAMES = ("i1", "i5", "h", "d")
 
 @tree.command(
     name="top_opps",
-    description="1m/5m/1h/d charts + snapshot: OHLCV, PE, float, gap, news, and 5-day history.",
+    description="1m/5m/1h/d + snapshot. Entry+stop for Massive study; exit optional (EOD default ~4pm ET).",
 )
-@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)")
-async def top_opps_command(interaction: discord.Interaction, symbol: str):
+@app_commands.describe(
+    symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)",
+    entry="Optional entry price — use with stop for Massive execution study charts",
+    stop="Optional stop price",
+    exit_price="Optional exit / target (omit to use last regular-session ~4pm ET close)",
+)
+async def top_opps_command(
+    interaction: discord.Interaction,
+    symbol: str,
+    entry: float | None = None,
+    stop: float | None = None,
+    exit_price: float | None = None,
+):
     ticker = validate_symbol(symbol)
     if ticker is None:
         await interaction.response.send_message(f"`{symbol}` doesn't look like a valid ticker symbol.", ephemeral=True)
         return
 
+    has_any_level = any(x is not None for x in (entry, stop, exit_price))
+    study_mode = entry is not None and stop is not None
+    if has_any_level and not study_mode:
+        await interaction.response.send_message(
+            "Provide **entry** and **stop** together for execution study charts (**exit** is optional — defaults to last regular-session close ~4pm ET). "
+            "Or leave entry/stop/exit empty for default FinViz charts.",
+            ephemeral=True,
+        )
+        return
+    if study_mode and not get_massive_api_key():
+        await interaction.response.send_message(
+            "Execution study charts need **MASSIVE_API_KEY** (or **POLYGON_API_KEY**) in the bot environment.",
+            ephemeral=True,
+        )
+        return
+
     await interaction.response.defer()
 
-    results = await asyncio.gather(
-        asyncio.to_thread(fetch_chart, ticker, "i1"),
-        asyncio.to_thread(fetch_chart, ticker, "i5"),
-        asyncio.to_thread(fetch_chart, ticker, "h"),
-        asyncio.to_thread(fetch_chart, ticker, "d"),
-        asyncio.to_thread(fetch_quote, ticker, 5),
-        asyncio.to_thread(fetch_news, ticker, 1),
-        asyncio.to_thread(fetch_v152_ticker_snapshot, ticker),
-    )
-    charts = results[:4]
-    bars = results[4]
-    articles = results[5]
-    snapshot = results[6]
+    study_metrics: dict | None = None
+    study_exit: float = 0.0
+    exit_is_rth_default = False
+    if study_mode:
+        results = await asyncio.gather(
+            asyncio.to_thread(fetch_quote, ticker, 5),
+            asyncio.to_thread(fetch_news, ticker, 1),
+            asyncio.to_thread(fetch_v152_ticker_snapshot, ticker),
+        )
+        bars = results[0]
+        articles = results[1]
+        snapshot = results[2]
+        if not bars:
+            await interaction.followup.send(f"No quote data found for **{ticker}**.")
+            return
+        latest_q = bars[0]
+        prev_c = bars[1].close if len(bars) > 1 else None
+        pct_today: float | None = None
+        if prev_c is not None and prev_c != 0:
+            pct_today = (latest_q.close - prev_c) / prev_c * 100.0
+        if exit_price is None:
+            resolved_exit = await asyncio.to_thread(default_exit_rth_close_et, ticker)
+            if resolved_exit is None:
+                await interaction.followup.send(
+                    f"Could not load a regular-session (~4pm ET) close for **{ticker}** to use as default exit — "
+                    "pass **exit** explicitly, or check **MASSIVE_API_KEY** and logs."
+                )
+                return
+            study_exit = float(resolved_exit)
+            exit_is_rth_default = True
+        else:
+            study_exit = float(exit_price)
+        study_pairs, study_missing, study_metrics = await asyncio.to_thread(
+            build_study_charts,
+            ticker,
+            float(entry),
+            float(stop),
+            study_exit,
+            quote_last_close=float(latest_q.close),
+            quote_pct_today=pct_today,
+        )
+        charts = []
+        missing_labels = list(study_missing)
+        chart_by_tf = dict(study_pairs)
+        for tf in _TOP_OPPS_TIMEFRAMES:
+            charts.append(chart_by_tf.get(tf))
+    else:
+        results = await asyncio.gather(
+            asyncio.to_thread(fetch_chart, ticker, "i1"),
+            asyncio.to_thread(fetch_chart, ticker, "i5"),
+            asyncio.to_thread(fetch_chart, ticker, "h"),
+            asyncio.to_thread(fetch_chart, ticker, "d"),
+            asyncio.to_thread(fetch_quote, ticker, 5),
+            asyncio.to_thread(fetch_news, ticker, 1),
+            asyncio.to_thread(fetch_v152_ticker_snapshot, ticker),
+        )
+        charts = list(results[:4])
+        bars = results[4]
+        articles = results[5]
+        snapshot = results[6]
+        missing_labels = []
 
-    if not bars:
+    if not study_mode and not bars:
         await interaction.followup.send(f"No quote data found for **{ticker}**.")
         return
 
     chart_embeds: list[discord.Embed] = []
     files: list[discord.File] = []
-    missing_labels: list[str] = []
+    finviz_missing: list[str] = []
     for tf, data in zip(_TOP_OPPS_TIMEFRAMES, charts):
         label = CHART_TIMEFRAME_LABELS.get(tf, tf)
         tag = CHART_TIMEFRAME_FILE_TAG.get(tf, tf)
-        fn = f"{ticker}_{tag}.png"
+        suffix = "_study" if study_mode else ""
+        fn = f"{ticker}_{tag}{suffix}.png"
         if data:
             files.append(discord.File(io.BytesIO(data), filename=fn))
             emb = discord.Embed(
@@ -1391,16 +1468,34 @@ async def top_opps_command(interaction: discord.Interaction, symbol: str):
                 color=0x2ECC71,
                 url=f"https://finviz.com/quote.ashx?t={ticker}",
             )
+            if study_mode:
+                emb.description = format_study_embed_lines(
+                    float(entry),
+                    float(stop),
+                    study_exit,
+                    study_metrics,
+                    exit_is_rth_default=exit_is_rth_default,
+                )
             emb.set_image(url=f"attachment://{fn}")
             chart_embeds.append(emb)
         else:
-            missing_labels.append(label)
+            finviz_missing.append(label)
+
+    if study_mode:
+        missing_labels = sorted(set(missing_labels) | set(finviz_missing))
+    else:
+        missing_labels = finviz_missing
 
     if chart_embeds:
         await interaction.followup.send(embeds=chart_embeds, files=files)
     else:
         await interaction.followup.send(
-            f"Could not load charts for **{ticker}**. Check **FINVIZ_API_KEY** and bot logs."
+            f"Could not load charts for **{ticker}**. "
+            + (
+                "Check **MASSIVE_API_KEY** and bot logs."
+                if study_mode
+                else "Check **FINVIZ_API_KEY** and bot logs."
+            )
         )
 
     latest = bars[0]
@@ -1456,7 +1551,10 @@ async def top_opps_command(interaction: discord.Interaction, symbol: str):
     if recent:
         detail.add_field(name="Recent Days", value=recent, inline=False)
 
-    foot_parts = ["Data from FinViz Elite"]
+    if study_mode:
+        foot_parts = ["Execution study charts · Snapshot: FinViz Elite"]
+    else:
+        foot_parts = ["Data from FinViz Elite"]
     if missing_labels:
         foot_parts.append("Missing charts: " + ", ".join(missing_labels))
     detail.set_footer(text=" • ".join(foot_parts))
