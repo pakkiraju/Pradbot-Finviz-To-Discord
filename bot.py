@@ -184,6 +184,12 @@ _SCAN_CHOICES = [
 # Match post_scans_elite.py spacing between webhook posts
 _SCANS_ALL_DELAY_SEC = 1.5
 
+_INPLAY_SCANNER_CHOICES = [
+    app_commands.Choice(name="Default", value="default"),
+    app_commands.Choice(name="Small caps", value="smallcaps"),
+    app_commands.Choice(name="Earnings", value="earnings"),
+]
+
 
 async def _followup_scan_embeds(interaction: discord.Interaction, scan_def) -> tuple[int, int]:
     """Fetch one scan and post embed(s). Returns (row_count, embed_count)."""
@@ -306,6 +312,13 @@ async def on_ready():
             "Synced slash commands globally (set GUILD_ID for instant guild sync; "
             "add SLASH_SYNC_GLOBAL_ALSO=1 with GUILD_ID for dual sync)"
         )
+    # Confirms deployed code: /inplay `scanner` dropdown should match this list in Discord.
+    _scan_names = [c.name for c in _INPLAY_SCANNER_CHOICES]
+    logger.info(
+        "slash_build inplay_scanner_choices=%s git_sha=%s",
+        _scan_names,
+        os.environ.get("RAILWAY_GIT_COMMIT_SHA", ""),
+    )
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
@@ -965,13 +978,6 @@ async def top_losers_command(
     embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
-
-
-_INPLAY_SCANNER_CHOICES = [
-    app_commands.Choice(name="Default", value="default"),
-    app_commands.Choice(name="Small caps", value="smallcaps"),
-    app_commands.Choice(name="Earnings", value="earnings"),
-]
 
 
 @tree.command(
