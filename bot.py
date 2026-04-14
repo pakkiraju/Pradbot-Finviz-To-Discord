@@ -165,6 +165,7 @@ from finviz_ah_movers import fetch_ah_movers_pair
 from inplay_earnings import build_inplay_earnings_embed_fields, fetch_inplay_earnings_rows
 from massive_rest import get_massive_api_key
 from top_opps_charts import build_study_charts, resolve_default_exit_for_top_opps, study_levels_as_embed_fields
+from notion_top_opps import build_top_opps_payload, create_notion_page, notion_top_opps_ready
 from heatmap_pipeline import build_daily_heatmaps
 from scan_registry import SCAN_BY_ID, SCANS
 
@@ -1438,6 +1439,52 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
 _TOP_OPPS_TIMEFRAMES = ("i1", "i5", "h", "d")
 
 
+def _top_opps_notion_user_ok(user: discord.User | discord.Member) -> bool:
+    """Only this Discord login (username) sees the Notion button; override with TOP_OPPS_NOTION_USERNAME."""
+    want = (os.environ.get("TOP_OPPS_NOTION_USERNAME") or "traderprad").strip().lower()
+    uname = (getattr(user, "name", None) or "").strip().lower()
+    return bool(want) and bool(uname) and uname == want
+
+
+class TopOppsNotionView(discord.ui.View):
+    """Optional save for /top_opps — only for configured user + Notion env."""
+
+    def __init__(
+        self,
+        payload,
+        invoker_id: int,
+        chart_pngs: list[tuple[str, str, bytes]] | None = None,
+    ):
+        super().__init__(timeout=3600.0)
+        self.payload = payload
+        self.invoker_id = invoker_id
+        self.chart_pngs = chart_pngs or []
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "Only the person who ran `/top_opps` can use this button.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Save to Notion", style=discord.ButtonStyle.primary)
+    async def save_to_notion(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        ok, msg = await asyncio.to_thread(create_notion_page, self.payload, self.chart_pngs)
+        if ok:
+            if msg.startswith("http"):
+                await interaction.followup.send(f"Saved to Notion: {msg}", ephemeral=True)
+            else:
+                await interaction.followup.send(msg, ephemeral=True)
+            try:
+                await interaction.message.edit(view=None)
+            except Exception:
+                pass
+        else:
+            await interaction.followup.send(msg[:2000], ephemeral=True)
+
+
 def _top_opps_attach_notes_to_first_chart_embed(embeds: list[discord.Embed], text: str, *, study_mode: bool) -> None:
     """First chart only: trade notes above the image. In study mode, a field after Entry/Stop (snapshot-style grid)."""
     raw = text.strip()
@@ -1669,6 +1716,38 @@ async def top_opps_command(
     detail.set_footer(text=" • ".join(foot_parts))
 
     await interaction.followup.send(embed=detail)
+
+    if notion_top_opps_ready() and _top_opps_notion_user_ok(interaction.user):
+        notion_payload = build_top_opps_payload(
+            ticker=ticker,
+            study_mode=study_mode,
+            entry=entry,
+            stop=stop,
+            study_exit=study_exit if study_mode else None,
+            exit_default_kind=exit_default_kind if study_mode else None,
+            study_metrics=study_metrics if study_mode else None,
+            notes=notes,
+            latest=latest,
+            snapshot=snapshot,
+            change_str=change_str,
+            gap_str=_gap_display_str(snapshot, latest, prev_close),
+            bars=bars,
+            articles=articles,
+        )
+        chart_pngs_notion: list[tuple[str, str, bytes]] = []
+        for tf, data in zip(_TOP_OPPS_TIMEFRAMES, charts):
+            if not data:
+                continue
+            label = CHART_TIMEFRAME_LABELS.get(tf, tf)
+            tag = CHART_TIMEFRAME_FILE_TAG.get(tf, tf)
+            suffix = "_study" if study_mode else ""
+            fn = f"{ticker}_{tag}{suffix}.png"
+            chart_pngs_notion.append((label, fn, data))
+        await interaction.followup.send(
+            "Save this `/top_opps` run (fields + charts) to Notion?",
+            view=TopOppsNotionView(notion_payload, interaction.user.id, chart_pngs_notion),
+            ephemeral=True,
+        )
 
 
 # ---------------------------------------------------------------------------
