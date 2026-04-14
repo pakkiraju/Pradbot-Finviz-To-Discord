@@ -324,10 +324,24 @@ async def on_ready():
     logger.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
 
 
+def _normalize_env_url(raw: str) -> str:
+    """Strip whitespace and one layer of surrounding quotes.
+
+    Some hosts (e.g. Railway) persist values entered with quotes, so the env
+    value can be literally ``\"https://...#readme\"`` — invalid for Discord
+    embed URLs and markdown links. GitHub README anchors need ``#``; do not
+    encode the hash unless your host strips it.
+    """
+    s = (raw or "").strip()
+    while len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1].strip()
+    return s
+
+
 def _readme_doc_url() -> str:
     """Public GitHub README (or docs) URL for /help — set README_URL in the host environment."""
     for key in ("README_URL", "GITHUB_README_URL", "DOCS_URL"):
-        v = os.environ.get(key, "").strip()
+        v = _normalize_env_url(os.environ.get(key, ""))
         if v:
             return v
     return ""
