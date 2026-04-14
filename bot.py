@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz earnings AMC/BMO + Massive %EAVOL vs 21d avg). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz AMC/BMO + Massive %EAVOL, fundamentals embed). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
 """
 
 import logging
@@ -162,7 +162,7 @@ from finviz_inplay import (
     format_inplay_smallcap_description,
 )
 from finviz_ah_movers import fetch_ah_movers_pair
-from inplay_earnings import fetch_inplay_earnings_rows, format_inplay_earnings_description
+from inplay_earnings import build_inplay_earnings_embed_fields, fetch_inplay_earnings_rows
 from massive_rest import get_massive_api_key
 from top_opps_charts import build_study_charts, resolve_default_exit_for_top_opps, study_levels_as_embed_fields
 from heatmap_pipeline import build_daily_heatmaps
@@ -337,8 +337,8 @@ def _help_embed() -> discord.Embed:
     doc = _readme_doc_url()
     desc_parts = [
         "Short reference for this bot. Commands that use **FinViz Elite** need **`FINVIZ_API_KEY`** in the host "
-        "environment. **`/inplay`** with **scanner: Earnings** also needs **`MASSIVE_API_KEY`** (or "
-        "**`POLYGON_API_KEY`**).",
+        "environment. **`/inplay`** · **Earnings** and **`/top_opps`** (study charts) need **`MASSIVE_API_KEY`** "
+        "(or **`POLYGON_API_KEY`**) where applicable.",
     ]
     if doc:
         desc_parts.append(f"\n**[Full documentation (README) ↗]({doc})** — setup, examples, slash reference, troubleshooting.")
@@ -378,7 +378,7 @@ def _help_embed() -> discord.Embed:
     embed.add_field(
         name="Screens (FinViz Elite)",
         value=(
-            "`/inplay` — optional **scanner**: Default · Small caps · **Earnings** (%EAVOL; needs Massive key)\n"
+            "`/inplay` — optional **scanner**: Default · Small caps · **Earnings** (%EAVOL + Gap/ATR; needs Massive)\n"
             "`/earnings` — **period**: Today · Weekly\n"
             "`/heatmap` — **universe** (S&P 500, NASDAQ 100, Dow, Russell 2000)"
         ),
@@ -1134,10 +1134,10 @@ async def ah_movers_command(interaction: discord.Interaction):
 
 @tree.command(
     name="inplay",
-    description="Stocks in play: news + liquidity, small caps, or earnings + extended-hours %EAVOL (FinViz + Massive)",
+    description="Stocks in play: news + liquidity, small caps, or earnings + Massive %EAVOL (FinViz + Massive)",
 )
 @app_commands.describe(
-    scanner="Default: news + liquidity. Small caps: cap + vol screen. Earnings: AMC/BMO names + overnight %EAVOL vs 21d avg (needs MASSIVE_API_KEY).",
+    scanner="Default: news + liquidity. Small caps: cap + vol. Earnings: %EAVOL + Gap/ATR (needs Massive key).",
 )
 @app_commands.choices(scanner=_INPLAY_SCANNER_CHOICES)
 async def inplay_command(
@@ -1154,25 +1154,32 @@ async def inplay_command(
         if not get_massive_api_key():
             await interaction.response.send_message(
                 "Set **MASSIVE_API_KEY** (or **POLYGON_API_KEY**) in Railway Variables to use "
-                "**/inplay** with **Earnings** (extended-hours volume from Massive).",
+                "**/inplay** with **Earnings** (%EAVOL from Massive).",
                 ephemeral=True,
             )
             return
         await interaction.response.defer()
         rows, screener_url = await asyncio.to_thread(fetch_inplay_earnings_rows)
-        desc = format_inplay_earnings_description(rows)
-        title = "In play — Earnings (%EAVOL)"
-        footer = (
-            "FinViz Elite • earnings AMC/BMO • avg vol >1M • price >$1 • "
-            "Massive prior AH + current pre-market vs 21d avg vol • ** = %EAVOL ≥ 20%"
+        title = "In play — Earnings"
+        if not rows:
+            embed = discord.Embed(
+                title=title,
+                description="*No stocks matched this FinViz earnings screen.*",
+                url=screener_url,
+                color=0x06B6D4,
+            )
+        else:
+            embed = discord.Embed(
+                title=title,
+                description="Sorted by **%EAVOL** (extended-hours volume vs 21-day average daily volume).",
+                url=screener_url,
+                color=0x06B6D4,
+            )
+            for fname, fval in build_inplay_earnings_embed_fields(rows):
+                embed.add_field(name=fname, value=fval, inline=False)
+        embed.set_footer(
+            text="FinViz Elite + Massive · 🔥 EAVOL ≥50% · 🟡 20–49% · ⬜ <20%"
         )
-        embed = discord.Embed(
-            title=title,
-            description=desc,
-            url=screener_url,
-            color=0x06B6D4,
-        )
-        embed.set_footer(text=footer)
         await interaction.followup.send(embed=embed)
         logger.info("inplay (earnings): %d rows for %s", len(rows), interaction.user)
         return
