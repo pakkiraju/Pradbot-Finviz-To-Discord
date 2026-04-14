@@ -1856,15 +1856,22 @@ def _build_ev_embed(r: EVResult) -> discord.Embed:
         inline=True,
     )
 
+    rr_lines = [
+        f"**Reward (R):** ${r.reward:,.2f}",
+        f"**Risk (L):** ${r.risk:,.2f}",
+        f"**R:L ratio:** {r.b:.2f}",
+        f"**EV / share:** ${r.ev_per_share:,.4f}",
+        f"**EV/R (setup math):** {_pct(r.evr)}",
+    ]
+    if abs(r.grade_conservatism - 1.0) > 1e-9:
+        rr_lines.append(
+            f"**EV/R (for letter grade):** {_pct(r.evr_for_grade)} "
+            f"(× {r.grade_conservatism:g} **EVSIZE_GRADE_CONSERVATISM**)"
+        )
+
     embed.add_field(
         name="Risk / Reward",
-        value=(
-            f"**Reward (R):** ${r.reward:,.2f}\n"
-            f"**Risk (L):** ${r.risk:,.2f}\n"
-            f"**R:L ratio:** {r.b:.2f}\n"
-            f"**EV / share:** ${r.ev_per_share:,.4f}\n"
-            f"**EV/R:** {_pct(r.evr)}"
-        ),
+        value="\n".join(rr_lines),
         inline=True,
     )
 
@@ -1890,7 +1897,11 @@ def _build_ev_embed(r: EVResult) -> discord.Embed:
     embed.add_field(name="Position Sizing", value=sizing_text, inline=False)
 
     embed.set_footer(
-        text="Educational tool only — not financial advice. Fractional Kelly + 50% single-trade cap on daily budget."
+        text=(
+            "Educational only — not financial advice. "
+            "Letter grade uses stricter EV/R tiers than naive 0.25=A+; optional EVSIZE_GRADE_CONSERVATISM in .env. "
+            "Kelly sizing still uses your stated probability (grade can be more skeptical than size)."
+        )
     )
     return embed
 
