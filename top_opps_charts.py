@@ -187,28 +187,45 @@ def compute_execution_metrics(entry: float, stop: float, target: float) -> dict[
     return {"risk": risk, "reward": reward, "rr": rr, "ev50": ev50, "side": side}
 
 
-def format_study_embed_lines(
+def study_levels_as_embed_fields(
     entry: float,
     stop: float,
     target: float,
     metrics: dict[str, Any] | None,
     *,
-    exit_is_rth_default: bool = False,
-) -> str:
-    exit_note = " *(RTH ~4pm ET — default)*" if exit_is_rth_default else ""
-    lines = [
-        f"Entry **{entry:.2f}** · Stop **{stop:.2f}** · Exit **{target:.2f}**{exit_note}",
+    exit_default_kind: str | None = None,
+) -> list[tuple[str, str, bool]]:
+    """(name, value, inline) tuples — same grid style as the FinViz snapshot embed."""
+    if exit_default_kind == "last_trade":
+        exit_note = "\n_last traded (default)_"
+    elif exit_default_kind == "rth_close":
+        exit_note = "\n_regular session close (default)_"
+    else:
+        exit_note = ""
+    fields: list[tuple[str, str, bool]] = [
+        ("Entry", f"${entry:,.2f}", True),
+        ("Stop", f"${stop:,.2f}", True),
+        ("Exit", f"${target:,.2f}{exit_note}", True),
     ]
     if metrics:
-        lines.append(
-            f"R:R **{metrics['rr']:.2f}** · EV/Share=**${metrics['ev50']:.2f}** (at 50% probability)"
-        )
         side_raw = str(metrics.get("side", "mixed")).lower()
         side_disp = {"long": "Long", "short": "Short", "mixed": "Mixed"}.get(side_raw, side_raw.title())
-        lines.append(f"Side: **{side_disp}**")
+        fields.extend(
+            [
+                ("R:R", f"{metrics['rr']:.2f}", True),
+                ("EV @50%", f"${metrics['ev50']:,.2f}", True),
+                ("Side", side_disp, True),
+            ]
+        )
     else:
-        lines.append("R:R / EV — *ambiguous level order (set stop on loss side, target on profit side)*")
-    return "\n".join(lines)
+        fields.append(
+            (
+                "R:R / EV",
+                "— *ambiguous level order (set stop on loss side, target on profit side)*",
+                False,
+            )
+        )
+    return fields
 
 
 def _timestamp_to_et(ts: pd.Timestamp | datetime | None) -> datetime:
@@ -487,6 +504,22 @@ def default_exit_rth_close_et(ticker: str, *, caller: str = "top_opps_eod_exit")
         return by_day[prior[-1]]
 
     return by_day[sorted_days[-1]]
+
+
+def resolve_default_exit_for_top_opps(
+    ticker: str,
+    quote_close: float,
+    *,
+    caller: str = "top_opps_default_exit",
+) -> tuple[float, str | None]:
+    """When user omits exit: before 4:00pm ET → last trade (quote close); at/after 4:00pm ET → RTH session close from minute bars, else quote."""
+    now_et = datetime.now(ET)
+    if now_et.time() < time(16, 0):
+        return float(quote_close), "last_trade"
+    rth = default_exit_rth_close_et(ticker, caller=caller)
+    if rth is not None:
+        return float(rth), "rth_close"
+    return float(quote_close), "last_trade"
 
 
 def _fetch_extended_hourly(ticker: str, *, caller: str) -> list[dict[str, Any]]:

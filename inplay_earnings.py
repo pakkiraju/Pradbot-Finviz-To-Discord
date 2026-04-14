@@ -1,4 +1,4 @@
-"""In-play earnings screen: FinViz Elite earnings-date filter + Massive extended-hours % vs 21d avg vol."""
+"""In-play earnings screen: FinViz Elite screen + Massive %EAVOL + fundamentals."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from fetch_elite import _get_api_key, _normalize_row, fetch_csv_export
+from fetch_elite import _get_api_key, _normalize_row, _parse_num, fetch_csv_export
 from fetch_v152_universe import V152_EXPORT_COLUMNS
 from finviz_earnings import _fmt_shares_compact, _fmt_volume_cell, _finviz_thousands_to_shares
 from massive_rest import (
@@ -23,24 +23,23 @@ logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 
-# FinViz: earnings AMC/BMO + avg vol >1M + price >$1 (matches v=151 screener)
 EARNINGS_F = "earningsdate_yesterdayafter|todaybefore,sh_avgvol_o1000,sh_price_o1"
 
 INPLAY_EARNINGS_CANDIDATE_CAP = 150
-_INPLAY_EARNINGS_DESC_MAX = 3900
-_EAVOL_STRONG_PCT = 20.0
-
+_DISPLAY_FIELD_ROWS = 8
 _MAX_WORKERS = 8
+
+# EAVOL tier thresholds (for emoji)
+_EAVOL_HOT = 50.0
+_EAVOL_WATCH = 20.0
 
 
 def earnings_screener_url() -> str:
-    """User-facing v=151 screener (same filters as browser link)."""
     q = urlencode({"v": "151", "f": EARNINGS_F, "ft": "4"})
     return f"https://elite.finviz.com/screener.ashx?{q}"
 
 
 def _earnings_export_url() -> str:
-    """v=152 CSV export with full columns; same *f=* filters as screener."""
     q = urlencode(
         {
             "v": "152",
@@ -54,7 +53,6 @@ def _earnings_export_url() -> str:
 
 
 def _fmt_volume_cell_v152(raw: str) -> str:
-    """v=152 Volume: bare integers are **full shares**; decimals / K/M/B use thousands rules."""
     s = (raw or "").strip().replace(",", "")
     if not s or s in "-—":
         return "—"
@@ -78,7 +76,6 @@ def _et_today() -> date:
 
 
 def trading_session_dates_from_spy() -> tuple[date, date] | None:
-    """(prior_trading_date, current_trading_date) in America/New_York from SPY daily bars."""
     end = _et_today()
     start = end - timedelta(days=45)
     bars = fetch_daily_bars("SPY", start.isoformat(), end.isoformat(), caller="spy_sessions")
@@ -130,7 +127,199 @@ def _avg_daily_volume_21(ticker: str, et_today: date) -> float | None:
     return sum(float(b["v"]) for b in last21) / 21.0
 
 
+def _cell_from_raw(raw: dict[str, Any], *names: str) -> str:
+    want = {n.lower() for n in names}
+    for k, v in raw.items():
+        if str(k).strip().lower() in want and v is not None:
+            s = str(v).strip()
+            if s and s not in ("-", "—"):
+                return s
+    return ""
+
+
+def _cell_key_contains(raw: dict[str, Any], substr: str) -> str:
+    sl = substr.lower()
+    for k, v in raw.items():
+        if sl in str(k).lower() and v is not None:
+            s = str(v).strip()
+            if s and s not in ("-", "—"):
+                return s
+    return ""
+
+
+def _short(s: str, max_len: int = 36) -> str:
+    t = re.sub(r"\s+", " ", (s or "").strip()).replace("|", "/")
+    if not t:
+        return "—"
+    if len(t) > max_len:
+        return t[: max_len - 1] + "…"
+    return t
+
+
+def _gap_pct_number(raw: dict[str, Any]) -> float | None:
+    g = _cell_from_raw(
+        raw,
+        "Gap",
+        "Performance (Gap)",
+        "Today Performance (Gap)",
+        "Gap %",
+    )
+    if not g or g in "—-":
+        return None
+    return _parse_num(g)
+
+
+def _fundamentals_from_raw(raw: dict[str, Any]) -> dict[str, str]:
+    """Best-effort v=152 labels; missing columns show —."""
+    company = _short(_cell_from_raw(raw, "Company", "company"), 42)
+    sector = _short(_cell_from_raw(raw, "Sector", "sector"), 36)
+    industry = _short(_cell_from_raw(raw, "Industry", "industry"), 36)
+    # Theme = FinViz "Sector/Theme" (not ETF tags).
+    theme = _short(
+        _cell_from_raw(raw, "Sector/Theme", "Sector/Theme AscDesc"),
+        40,
+    )
+    perf_1m = _short(_cell_from_raw(raw, "Performance (Month)", "Perf Month"), 10)
+    perf_1y = _short(_cell_from_raw(raw, "Performance (Year)", "Performance (Year To Date)"), 10)
+    pe = _short(_cell_from_raw(raw, "P/E", "P/E (TTM)", "PE"), 12)
+    eps_ttm = _short(_cell_from_raw(raw, "EPS (TTM)", "EPS ttm"), 14)
+    # Latest reported quarter: estimate vs actual (column names vary by FinViz export).
+    eps_est_rq = _cell_from_raw(
+        raw,
+        "EPS Estimate Last Quarter",
+        "EPS Estimate Current Quarter",
+        "EPS Est Last Quarter",
+        "EPS Est Current Quarter",
+    )
+    eps_act_rq = _cell_from_raw(
+        raw,
+        "EPS Actual Last Quarter",
+        "EPS Last Quarter",
+        "EPS Actual",
+        "EPS Reported Last Quarter",
+    )
+    eps_surprise = _short(_cell_from_raw(raw, "EPS Surprise"), 14)
+    rev_est_rq = _cell_from_raw(
+        raw,
+        "Revenue Estimate Last Quarter",
+        "Revenue Estimate Current Quarter",
+        "Sales Estimate Last Quarter",
+        "Revenue Est Last Quarter",
+    )
+    rev_act_rq = _cell_from_raw(
+        raw,
+        "Revenue Actual Last Quarter",
+        "Sales Actual Last Quarter",
+        "Revenue Last Quarter",
+        "Sales Last Quarter",
+    )
+    rev_surprise = _short(_cell_from_raw(raw, "Revenue Surprise", "Sales Surprise"), 14)
+    guidance = _short(_cell_key_contains(raw, "guidance"), 72)
+    if guidance == "—":
+        guidance = _short(
+            _cell_from_raw(
+                raw,
+                "EPS Growth Next Year",
+                "EPS Estimate Next Quarter",
+                "Sales Growth Next Year",
+            ),
+            72,
+        )
+    return {
+        "company": company,
+        "sector": sector,
+        "industry": industry,
+        "theme": theme,
+        "perf_1m": perf_1m,
+        "perf_1y": perf_1y,
+        "pe": pe,
+        "eps_ttm": eps_ttm,
+        "eps_est_rq": eps_est_rq,
+        "eps_act_rq": eps_act_rq,
+        "eps_surprise": eps_surprise,
+        "rev_est_rq": rev_est_rq,
+        "rev_act_rq": rev_act_rq,
+        "rev_surprise": rev_surprise,
+        "guidance": guidance,
+    }
+
+
+def _fmt_delta_eps(delta: float) -> str:
+    ad = abs(delta)
+    if ad < 1e-9:
+        return f"{delta:+.4f}"
+    if ad < 1:
+        s = f"{delta:+.4f}"
+        return s.rstrip("0").rstrip(".")
+    return f"{delta:+.2f}"
+
+
+def _fmt_delta_rev(delta: float) -> str:
+    ad = abs(delta)
+    if ad >= 1e9:
+        return f"{delta/1e9:+.2f}B"
+    if ad >= 1e6:
+        return f"{delta/1e6:+.2f}M"
+    if ad >= 1e3:
+        return f"{delta/1e3:+.2f}K"
+    return f"{delta:+,.0f}"
+
+
+def _est_act_delta_block(
+    title: str,
+    est: str,
+    act: str,
+    surprise_fb: str,
+    *,
+    scale: str = "eps",
+) -> str:
+    """One line: Est · Act · Δ, or surprise % if FinViz did not ship est/act columns."""
+    e = (est or "").strip()
+    a = (act or "").strip()
+    pe = _parse_num(e) if e else None
+    pa = _parse_num(a) if a else None
+    if pe is not None and pa is not None:
+        delta = pa - pe
+        if scale == "rev":
+            d_str = _fmt_delta_rev(delta)
+        else:
+            d_str = _fmt_delta_eps(delta)
+        return f"**{title}** Est {e} · Act {a} · Δ {d_str}"
+    if e or a:
+        return f"**{title}** Est {e or '—'} · Act {a or '—'} · Δ —"
+    sf = (surprise_fb or "").strip()
+    if sf and sf != "—":
+        return f"**{title}** Est/Act n/a · Surprise {sf}"
+    return f"**{title}** Est — · Act — · Δ —"
+
+
+def _build_gap_atr_fields(raw: dict[str, Any], normed: dict[str, Any]) -> dict[str, str]:
+    gap_n = _gap_pct_number(raw)
+    gap_str = f"{gap_n:+.2f}%" if gap_n is not None else "—"
+    atr_pct = normed.get("atr_pct")
+    atr_str = f"{float(atr_pct):.2f}%" if atr_pct is not None else "—"
+    gap_atr_str = "—"
+    if gap_n is not None and atr_pct is not None and abs(float(atr_pct)) > 1e-6:
+        gap_atr_str = f"{gap_n / float(atr_pct):.2f}×"
+    return {
+        "gap_str": gap_str,
+        "atr_str": atr_str,
+        "gap_atr_str": gap_atr_str,
+    }
+
+
+def eavol_tier_emoji(pct: float | None) -> str:
+    if pct is None:
+        return "⬛"
+    if pct >= _EAVOL_HOT:
+        return "🔥"
+    if pct >= _EAVOL_WATCH:
+        return "🟡"
+    return "⬜"
+
+
 def _enrich_one_ticker(
+    raw: dict[str, Any],
     normed: dict[str, Any],
     *,
     ticker: str,
@@ -140,10 +329,16 @@ def _enrich_one_ticker(
     pm_lo: int,
     pm_hi: int,
 ) -> dict[str, Any]:
-    out = dict(normed)
-    out["volume"] = _fmt_volume_cell_v152(str(normed.get("volume") or ""))
-    out["pct_eavol"] = None
-    out["eavol_ge_20"] = False
+    out: dict[str, Any] = {
+        "ticker": (normed.get("ticker") or "").upper(),
+        "price": normed.get("price") or "—",
+        "change": normed.get("change") or "—",
+        "volume": _fmt_volume_cell_v152(str(normed.get("volume") or "")),
+        "pct_eavol": None,
+    }
+    out.update(_fundamentals_from_raw(raw))
+    out.update(_build_gap_atr_fields(raw, normed))
+
     try:
         avg = _avg_daily_volume_21(ticker, et_today)
         if avg is None or avg <= 0:
@@ -151,16 +346,14 @@ def _enrich_one_ticker(
         ah = sum_minute_volume(ticker, ah_lo, ah_hi, caller=f"eavol_ah_{ticker}")
         pm = sum_minute_volume(ticker, pm_lo, pm_hi, caller=f"eavol_pm_{ticker}")
         ext = ah + pm
-        pct = (ext / avg) * 100.0
-        out["pct_eavol"] = pct
-        out["eavol_ge_20"] = pct >= _EAVOL_STRONG_PCT
+        out["pct_eavol"] = (ext / avg) * 100.0
     except Exception as e:
         logger.warning("inplay_earnings %s: %s", ticker, e)
     return out
 
 
 def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
-    """FinViz earnings universe + Massive overnight %EAVOL; sorted by %EAVOL desc (missing last)."""
+    """FinViz earnings + Massive %EAVOL; sorted by EAVOL desc."""
     screener = earnings_screener_url()
     if not _get_api_key():
         logger.error("FINVIZ_API_KEY not set; cannot fetch inplay earnings export")
@@ -183,7 +376,7 @@ def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
         logger.warning("inplay_earnings export returned no rows")
         return [], screener
 
-    candidates: list[tuple[str, dict[str, Any]]] = []
+    candidates: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     seen: set[str] = set()
     for raw in raw_rows:
         normed = _normalize_row(raw)
@@ -191,7 +384,7 @@ def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
         if not t or t in seen:
             continue
         seen.add(t)
-        candidates.append((t, normed))
+        candidates.append((t, raw, normed))
         if len(candidates) >= INPLAY_EARNINGS_CANDIDATE_CAP:
             break
 
@@ -200,7 +393,8 @@ def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
         futs = {
             ex.submit(
                 _enrich_one_ticker,
-                n,
+                raw,
+                normed,
                 ticker=t,
                 et_today=et_day,
                 ah_lo=ah_lo,
@@ -208,7 +402,7 @@ def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
                 pm_lo=pm_lo,
                 pm_hi=pm_hi,
             ): t
-            for t, n in candidates
+            for t, raw, normed in candidates
         }
         for fut in as_completed(futs):
             enriched.append(fut.result())
@@ -220,54 +414,78 @@ def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
         return (0, -float(p), (r.get("ticker") or "").upper())
 
     enriched.sort(key=_sort_key)
+    logger.info("inplay_earnings: %d rows", len(enriched))
     return enriched, screener
 
 
-def _table_cell(s: str, *, max_len: int = 14) -> str:
-    t = str(s).replace("|", "/").replace("\n", " ").strip()
-    if not t:
-        t = "—"
-    if len(t) > max_len:
-        t = t[: max_len - 1] + "…"
-    return t
+def build_inplay_earnings_embed_fields(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """Discord embed fields: (name, value). One field per ticker; values capped for 1024 limit."""
+    if not rows:
+        return []
+    out: list[tuple[str, str]] = []
+    for r in rows[:_DISPLAY_FIELD_ROWS]:
+        tk = (r.get("ticker") or "?").strip()
+        emoji = eavol_tier_emoji(r.get("pct_eavol"))
+        peav = r.get("pct_eavol")
+        peav_s = f"{float(peav):.1f}%" if peav is not None else "—"
+        name = f"{emoji} {tk} · EAVOL {peav_s}"[:256]
+
+        co = r.get("company") or "—"
+        sec = r.get("sector") or "—"
+        ind = r.get("industry") or "—"
+        th = r.get("theme") or "—"
+        p1m = r.get("perf_1m") or "—"
+        p1y = r.get("perf_1y") or "—"
+        pe = r.get("pe") or "—"
+        eps_t = r.get("eps_ttm") or "—"
+        eps_s = r.get("eps_surprise") or "—"
+        rev_s = r.get("rev_surprise") or "—"
+        gui = r.get("guidance") or "—"
+        eps_rq = _est_act_delta_block(
+            "EPS (report Q)",
+            str(r.get("eps_est_rq") or ""),
+            str(r.get("eps_act_rq") or ""),
+            eps_s,
+            scale="eps",
+        )
+        rev_rq = _est_act_delta_block(
+            "Rev (report Q)",
+            str(r.get("rev_est_rq") or ""),
+            str(r.get("rev_act_rq") or ""),
+            rev_s,
+            scale="rev",
+        )
+
+        val = (
+            f"**{co}**\n"
+            f"**Sector** {sec} · **Industry** {ind} · **Sector/Theme** {th}\n"
+            f"**1M** {p1m} · **1Y** {p1y} · **P/E** {pe}\n"
+            f"**EPS (TTM)** {eps_t}\n"
+            f"{eps_rq}\n"
+            f"{rev_rq}\n"
+            f"**Next Q / guidance** {gui}\n"
+            f"Gap {r.get('gap_str')} · ATR {r.get('atr_str')} · Gap/ATR {r.get('gap_atr_str')}\n\n\n"
+        )
+        if len(val) > 1020:
+            val = val[:1017] + "…"
+        out.append((name, val))
+    return out
 
 
-def format_inplay_earnings_description(
-    rows: list[dict[str, Any]],
-    *,
-    max_chars: int = _INPLAY_EARNINGS_DESC_MAX,
-) -> str:
+def format_inplay_earnings_description(rows: list[dict[str, Any]], *, max_chars: int = 3800) -> str:
+    """Legacy plain-text fallback (compact). Prefer :func:`build_inplay_earnings_embed_fields`."""
     if not rows:
         return "*No stocks matched this FinViz earnings screen.*"
-
-    legend = (
-        "**%EAVOL ≥ 20%** is shown in **bold**; all rows sorted by %EAVOL (highest first; "
-        "“—” if not computed)."
-    )
-    header = "| Symbol | Price | Change | Vol | %EAVOL |"
-    out_lines: list[str] = [legend, "", header]
-    total = sum(len(x) + 1 for x in out_lines)
-
-    for r in rows:
-        raw_tk = (r.get("ticker") or "").strip()
-        tk = _table_cell(raw_tk, max_len=8)
-        pr = _table_cell(r.get("price") or "—", max_len=10)
-        ch = _table_cell(r.get("change") or "—", max_len=10)
-        vo = _table_cell(r.get("volume") or "—", max_len=12)
-        pe = r.get("pct_eavol")
-        strong = bool(r.get("eavol_ge_20"))
-        if pe is not None:
-            pct_s = f"{float(pe):.1f}%"
-            if strong:
-                pct_s = f"**{pct_s}**"
-        else:
-            pct_s = "—"
-        pct_s = _table_cell(pct_s, max_len=18)
-        row = f"| {tk} | {pr} | {ch} | {vo} | {pct_s} |"
-        if total + len(row) + 1 > max_chars:
-            out_lines.append("| … | … | … | … | … | *truncated* |")
+    lines: list[str] = []
+    n = 0
+    for r in rows[:20]:
+        tk = (r.get("ticker") or "").strip()
+        em = eavol_tier_emoji(r.get("pct_eavol"))
+        peav = r.get("pct_eavol")
+        peav_s = f"{float(peav):.1f}%" if peav is not None else "—"
+        line = f"{em} **{tk}** EAVOL {peav_s} · {r.get('company', '—')}"
+        if n + len(line) > max_chars:
             break
-        out_lines.append(row)
-        total += len(row) + 1
-
-    return "\n".join(out_lines)
+        lines.append(line)
+        n += len(line) + 1
+    return "\n".join(lines)
