@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from fetch_elite import _get_api_key, _normalize_row, _parse_num, fetch_csv_export
 from fetch_v152_universe import V152_EXPORT_COLUMNS
 from finviz_earnings import _fmt_shares_compact, _fmt_volume_cell, _finviz_thousands_to_shares
+from finviz_inplay import _fmt_float_shares_display
 from massive_rest import (
     fetch_daily_bars,
     get_massive_api_key,
@@ -137,6 +138,15 @@ def _cell_from_raw(raw: dict[str, Any], *names: str) -> str:
     return ""
 
 
+def _cell_in_order(raw: dict[str, Any], *header_names: str) -> str:
+    """First non-empty cell matching *header_names* in order (avoids ambiguous multi-match)."""
+    for name in header_names:
+        s = _cell_from_raw(raw, name)
+        if s:
+            return s
+    return ""
+
+
 def _cell_key_contains(raw: dict[str, Any], substr: str) -> str:
     sl = substr.lower()
     for k, v in raw.items():
@@ -144,6 +154,85 @@ def _cell_key_contains(raw: dict[str, Any], substr: str) -> str:
             s = str(v).strip()
             if s and s not in ("-", "—"):
                 return s
+    return ""
+
+
+def _format_usd_compact(usd: float) -> str:
+    """Display USD notional as K / M / B / T (2 decimals except K)."""
+    au = abs(usd)
+    if au >= 1e12:
+        return f"{usd / 1e12:.2f}T"
+    if au >= 1e9:
+        return f"{usd / 1e9:.2f}B"
+    if au >= 1e6:
+        return f"{usd / 1e6:.2f}M"
+    if au >= 1e3:
+        return f"{usd / 1e3:.1f}K"
+    return f"{usd:.0f}"
+
+
+def _mcap_cell_to_usd(raw: str) -> float | None:
+    """Parse FinViz market cap to USD.
+
+    Elite exports usually use **K / M / B** suffixes (handled by :func:`fetch_elite._parse_num`).
+
+    Plain numbers without a suffix are typically **millions of USD** (e.g. ``846000`` → $846B,
+    ``450`` → $450M). Very large plain integers (``>= 10_000_000``) are treated as **full USD**
+    (e.g. ``45000000`` → $45M), matching FinViz when the CSV already expands to dollars.
+    """
+    o = (raw or "").strip().replace("\u00a0", " ")
+    if not o or o in "-—":
+        return None
+    # Explicit trillion (fetch_elite._parse_num only knows K/M/B)
+    m = re.match(r"^([\d.,]+)\s*T\s*$", o.replace(",", "").strip(), re.I)
+    if m:
+        return float(m.group(1)) * 1e12
+    up = o.upper()
+    has_kmb = bool(re.search(r"[0-9][\s]*[KMB]\s*$", up.replace(",", "")))
+    n = _parse_num(o)
+    if n is None:
+        return None
+    if has_kmb:
+        return n
+    # Plain numeric: default scale is **millions of USD** (FinViz screener-style).
+    if n >= 10_000_000:
+        return n
+    return n * 1e6
+
+
+def _format_market_cap_display(raw: str) -> str:
+    """Normalize FinViz market cap to ``K`` / ``M`` / ``B`` / ``T`` labels."""
+    s0 = (raw or "").strip()
+    if not s0 or s0 in "-—":
+        return "—"
+    usd = _mcap_cell_to_usd(s0)
+    if usd is not None and usd > 0:
+        return _format_usd_compact(usd)
+    return _short(s0, 22)
+
+
+def _find_market_cap_raw(raw: dict[str, Any]) -> str:
+    """Resolve Market Cap cell across common FinViz header spellings."""
+    for key in (
+        "Market Cap",
+        "Market Cap.",
+        "Mkt Cap",
+        "MarketCap",
+        "market_cap",
+        "Market cap",
+    ):
+        v = _cell_from_raw(raw, key)
+        if v:
+            return v
+    for k, v in raw.items():
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s or s in ("-", "—"):
+            continue
+        lk = str(k).strip().lower()
+        if "market" in lk and "cap" in lk:
+            return s
     return ""
 
 
@@ -225,6 +314,15 @@ def _fundamentals_from_raw(raw: dict[str, Any]) -> dict[str, str]:
             ),
             72,
         )
+    market_cap = _format_market_cap_display(_find_market_cap_raw(raw))
+    shares_float = _fmt_float_shares_display(
+        _cell_in_order(raw, "Shares Float", "Share Float", "Float", "shares float")
+    )
+    short_float = _short(
+        _cell_in_order(raw, "Short Float", "Short Interest", "Short float"),
+        12,
+    )
+    country = _short(_cell_from_raw(raw, "Country", "country"), 28)
     return {
         "company": company,
         "sector": sector,
@@ -241,6 +339,10 @@ def _fundamentals_from_raw(raw: dict[str, Any]) -> dict[str, str]:
         "rev_act_rq": rev_act_rq,
         "rev_surprise": rev_surprise,
         "guidance": guidance,
+        "market_cap": market_cap,
+        "shares_float": shares_float,
+        "short_float": short_float,
+        "country": country,
     }
 
 
@@ -431,6 +533,10 @@ def build_inplay_earnings_embed_fields(rows: list[dict[str, Any]]) -> list[tuple
         name = f"{emoji} {tk} · EAVOL {peav_s}"[:256]
 
         co = r.get("company") or "—"
+        mcap = r.get("market_cap") or "—"
+        flt = r.get("shares_float") or "—"
+        sflt = r.get("short_float") or "—"
+        ctry = r.get("country") or "—"
         sec = r.get("sector") or "—"
         ind = r.get("industry") or "—"
         th = r.get("theme") or "—"
@@ -458,6 +564,7 @@ def build_inplay_earnings_embed_fields(rows: list[dict[str, Any]]) -> list[tuple
 
         val = (
             f"**{co}**\n"
+            f"**Mkt cap** {mcap} · **Float** {flt} · **Short float** {sflt} · **Country** {ctry}\n"
             f"**Sector** {sec} · **Industry** {ind} · **Sector/Theme** {th}\n"
             f"**1M** {p1m} · **1Y** {p1y} · **P/E** {pe}\n"
             f"**EPS (TTM)** {eps_t}\n"

@@ -349,20 +349,13 @@ def _readme_doc_url() -> str:
 
 def _help_embed() -> discord.Embed:
     doc = _readme_doc_url()
-    desc_parts = [
-        "Short reference for this bot. Commands that use **FinViz Elite** need **`FINVIZ_API_KEY`** in the host "
-        "environment. **`/inplay`** · **Earnings** and **`/top_opps`** (study charts) need **`MASSIVE_API_KEY`** "
-        "(or **`POLYGON_API_KEY`**) where applicable.",
-    ]
     if doc:
-        desc_parts.append(f"\n**[Full documentation (README) ↗]({doc})** — setup, examples, slash reference, troubleshooting.")
+        description = f"**[Documentation ↗]({doc})**"
     else:
-        desc_parts.append(
-            "\n*To show a link to your repo README here, set **`README_URL`** (or **`GITHUB_README_URL`**) on the bot host.*"
-        )
+        description = None
     embed = discord.Embed(
         title="PradBot — commands",
-        description="".join(desc_parts),
+        description=description,
         color=0x06B6D4,
     )
     if doc:
@@ -385,14 +378,14 @@ def _help_embed() -> discord.Embed:
             "`/top_gainers` — optional **min_price**, **min_volume**\n"
             "`/top_losers` — optional **min_price**, **min_volume**\n"
             "`/ah_movers` — top 5 AH +3%+ and -3%+ (Elite liquidity filters)\n"
-            "`/top_opps` — `symbol` · optional **entry**, **stop**, **exit**, **notes** (notes under last chart)"
+            "`/top_opps` — `symbol` · optional **entry**, **stop**, **exit**, **notes**"
         ),
         inline=False,
     )
     embed.add_field(
         name="Screens (FinViz Elite)",
         value=(
-            "`/inplay` — optional **scanner**: Default · Small caps · **Earnings** (%EAVOL + Gap/ATR; needs Massive)\n"
+            "`/inplay` — **scanner**: Default · Small caps · Earnings\n"
             "`/earnings` — **period**: Today · Weekly\n"
             "`/heatmap` — **universe** (S&P 500, NASDAQ 100, Dow, Russell 2000)"
         ),
@@ -401,10 +394,10 @@ def _help_embed() -> discord.Embed:
     embed.add_field(
         name="Calendars & utilities",
         value=(
-            "`/econ` — **period**: Today · This week (no FinViz key)\n"
-            "`/ipo` — **period**: Today · Full calendar (no FinViz key)\n"
+            "`/econ` — **period**: Today · This week\n"
+            "`/ipo` — **period**: Today · Full calendar\n"
             "`/evsize` — trade EV grade + Kelly sizing (see README for parameters)\n"
-            "`/purge` — **amount** (count or **all**; needs Manage Messages)"
+            "`/purge` — **amount** (number or **all**). **Warning:** permanently deletes messages in this channel."
         ),
         inline=False,
     )
@@ -414,7 +407,7 @@ def _help_embed() -> discord.Embed:
 
 @tree.command(
     name="help",
-    description="List all slash commands, short usage, and link to the GitHub README (set README_URL on the host)",
+    description="List all slash commands and what they do",
 )
 async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=_help_embed())
@@ -834,8 +827,11 @@ class PurgeAllConfirmView(discord.ui.View):
         self.stop()
 
 
-@tree.command(name="purge", description="Delete messages from the current channel")
-@app_commands.describe(amount='Number of messages to delete, or "all"')
+@tree.command(
+    name="purge",
+    description="Permanently delete messages in this channel (count or all). Cannot be undone.",
+)
+@app_commands.describe(amount='Number of recent messages to delete, or "all" to clear the channel')
 @app_commands.default_permissions(manage_messages=True)
 async def purge_command(interaction: discord.Interaction, amount: str):
     channel = interaction.channel
@@ -854,7 +850,8 @@ async def purge_command(interaction: discord.Interaction, amount: str):
     if amount.lower() == "all":
         view = PurgeAllConfirmView(interaction.user.id)
         await interaction.response.send_message(
-            "Are you sure you want to delete **all** messages in this channel?\n"
+            "**Warning:** This will **permanently delete all messages** in this channel. "
+            "This cannot be undone.\n"
             "Click **Yes, delete all** within 15 seconds to confirm.",
             view=view,
         )
@@ -897,7 +894,10 @@ async def purge_command(interaction: discord.Interaction, amount: str):
 
     await interaction.response.defer(ephemeral=True)
     deleted = await channel.purge(limit=count)
-    await interaction.followup.send(f"Purged **{len(deleted)}** messages.", ephemeral=True)
+    await interaction.followup.send(
+        f"Permanently deleted **{len(deleted)}** message(s). This cannot be undone.",
+        ephemeral=True,
+    )
     logger.info("purge %d: %d messages deleted in #%s by %s", count, len(deleted), channel.name, interaction.user)
 
 
@@ -1148,10 +1148,10 @@ async def ah_movers_command(interaction: discord.Interaction):
 
 @tree.command(
     name="inplay",
-    description="Stocks in play: news + liquidity, small caps, or earnings + Massive %EAVOL (FinViz + Massive)",
+    description="Stocks in play — choose scanner: Default, Small caps, or Earnings",
 )
 @app_commands.describe(
-    scanner="Default: news + liquidity. Small caps: cap + vol. Earnings: %EAVOL + Gap/ATR (needs Massive key).",
+    scanner="Default · Small caps · Earnings",
 )
 @app_commands.choices(scanner=_INPLAY_SCANNER_CHOICES)
 async def inplay_command(
