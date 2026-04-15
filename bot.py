@@ -365,7 +365,7 @@ def _help_embed() -> discord.Embed:
         name="Charts, options, news",
         value=(
             "`/chart` — `symbol` · optional **timeframe** (intraday 1m–1h or D / W / M)\n"
-            "`/quote` — `symbol` (chart + OHLCV + news)\n"
+            "`/quote` — `symbol` (chart + OHLCV + fundamentals + news)\n"
             "`/gex` — `symbol` · optional **expiry**\n"
             "`/zerodte` — `symbol`\n"
             "`/news` — `symbol`"
@@ -1369,7 +1369,10 @@ def _gap_display_str(snapshot, latest, prev_close: float | None) -> str:
     return "N/A"
 
 
-@tree.command(name="quote", description="Quick quote panel — chart, OHLCV, change, and latest news")
+@tree.command(
+    name="quote",
+    description="Quote — chart, OHLCV, P/E, cap, sector, industry, short float, float, news",
+)
 @app_commands.describe(symbol="Ticker symbol (e.g. AAPL, MSFT, BRK.B)")
 async def quote_command(interaction: discord.Interaction, symbol: str):
     ticker = validate_symbol(symbol)
@@ -1379,10 +1382,11 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
 
     await interaction.response.defer()
 
-    bars, chart_data, articles = await asyncio.gather(
+    bars, chart_data, articles, snapshot = await asyncio.gather(
         asyncio.to_thread(fetch_quote, ticker, 5),
         asyncio.to_thread(fetch_chart, ticker, "d"),
         asyncio.to_thread(fetch_news, ticker, 3),
+        asyncio.to_thread(fetch_v152_ticker_snapshot, ticker),
     )
 
     if not bars:
@@ -1400,6 +1404,13 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
     else:
         change_str = "N/A"
 
+    pe = snapshot.pe if snapshot else "—"
+    mcap = snapshot.market_cap_display if snapshot else "—"
+    sector = snapshot.sector if snapshot else "—"
+    industry = snapshot.industry if snapshot else "—"
+    short_f = snapshot.short_float_display if snapshot else "—"
+    sh_float = snapshot.shares_float_display if snapshot else "—"
+
     embed = discord.Embed(
         title=f"{ticker} — ${latest.close:,.2f}  {change_str}",
         color=0x1ABC9C,
@@ -1410,6 +1421,12 @@ async def quote_command(interaction: discord.Interaction, symbol: str):
     embed.add_field(name="Low", value=f"${latest.low:,.2f}", inline=True)
     embed.add_field(name="Volume", value=_fmt_vol(latest.volume), inline=True)
     embed.add_field(name="Date", value=latest.date, inline=True)
+    embed.add_field(name="P/E", value=pe, inline=True)
+    embed.add_field(name="Mkt Cap", value=mcap, inline=True)
+    embed.add_field(name="Float", value=sh_float, inline=True)
+    embed.add_field(name="Short Float", value=short_f, inline=True)
+    embed.add_field(name="Sector", value=sector, inline=True)
+    embed.add_field(name="Industry", value=industry, inline=True)
 
     recent = _recent_days_field_value(bars)
     if recent:
@@ -1668,8 +1685,13 @@ async def top_opps_command(
     avg_vol = snapshot.avg_vol_display if snapshot else "—"
     rel_vol = snapshot.rel_vol_display if snapshot else "—"
     pe = snapshot.pe if snapshot else "—"
+    mcap = snapshot.market_cap_display if snapshot else "—"
     sh_float = snapshot.shares_float_display if snapshot else "—"
     short_f = snapshot.short_float_display if snapshot else "—"
+    sector = snapshot.sector if snapshot else "—"
+    industry = snapshot.industry if snapshot else "—"
+    sector_theme = snapshot.sector_theme if snapshot else "—"
+    country = snapshot.country if snapshot else "—"
 
     detail = discord.Embed(
         title=f"{ticker} — snapshot",
@@ -1686,8 +1708,13 @@ async def top_opps_command(
     detail.add_field(name="Change", value=change_str, inline=True)
     detail.add_field(name="Gap", value=_gap_display_str(snapshot, latest, prev_close), inline=True)
     detail.add_field(name="P/E", value=pe, inline=True)
+    detail.add_field(name="Mkt Cap", value=mcap, inline=True)
     detail.add_field(name="Share Float", value=sh_float, inline=True)
     detail.add_field(name="Short Float", value=short_f, inline=True)
+    detail.add_field(name="Sector", value=sector, inline=True)
+    detail.add_field(name="Industry", value=industry, inline=True)
+    detail.add_field(name="Sector/Theme", value=sector_theme, inline=True)
+    detail.add_field(name="Country", value=country, inline=True)
 
     if articles:
         a = articles[0]

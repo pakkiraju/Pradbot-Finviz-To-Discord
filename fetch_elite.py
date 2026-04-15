@@ -269,8 +269,8 @@ def fetch_top_movers(
 ) -> tuple[list[dict], str]:
     """Fetch top gainers or losers from FinViz Elite.
 
-    Returns (rows, screener_url). Rows are normalized dicts sorted by |change|
-    (descending for gainers, ascending for losers), capped at *limit*.
+    Returns (rows, screener_url). Rows are normalized dicts sorted by **change %**
+    (highest first for gainers, **most negative first** for losers), capped at *limit*.
     """
     if kind not in _MOVERS_SIGNALS:
         raise ValueError(f"kind must be 'gainers' or 'losers', got {kind!r}")
@@ -308,8 +308,9 @@ def fetch_top_movers(
             normed["volume"] = f"{int(round(vs)):,}"
         rows.append(normed)
 
-    reverse = kind == "gainers"
-    rows.sort(key=lambda r: abs(_change_sort_key(r)), reverse=reverse)
+    # Gainers: highest % first. Losers: worst (most negative) first — do **not** use abs(change)
+    # ascending, or -1% sorts above -50%.
+    rows.sort(key=lambda r: _change_sort_key(r), reverse=(kind == "gainers"))
     return rows[:limit], screener_url
 
 
