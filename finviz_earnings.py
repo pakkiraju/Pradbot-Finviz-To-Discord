@@ -7,15 +7,15 @@ from collections import defaultdict
 from datetime import date
 from typing import Literal
 
-from fetch_elite import fetch_csv_export
+from fetch_elite import _parse_num, fetch_csv_export
 from fetch_v152_universe import V152_EXPORT_COLUMNS
 
 EarningsPeriod = Literal["today", "weekly"]
 
 # Matches user-provided screener links; export uses same f= + ft=4 + v=152 columns.
 SCREENER_URLS: dict[EarningsPeriod, str] = {
-    "today": "https://elite.finviz.com/screener.ashx?v=152&f=earningsdate_today&ft=4",
-    "weekly": "https://elite.finviz.com/screener.ashx?v=152&f=earningsdate_thisweek&ft=4",
+    "today": "https://elite.finviz.com/screener.ashx?v=152&f=earningsdate_today&ft=4&o=-marketcap",
+    "weekly": "https://elite.finviz.com/screener.ashx?v=152&f=earningsdate_thisweek&ft=4&o=-marketcap",
 }
 
 _FILTER_PARAM: dict[EarningsPeriod, str] = {
@@ -27,7 +27,7 @@ _FILTER_PARAM: dict[EarningsPeriod, str] = {
 def _export_url(period: EarningsPeriod) -> str:
     f = _FILTER_PARAM[period]
     return (
-        f"https://elite.finviz.com/export.ashx?v=152&ft=4&f={f}&o=-volume&c={V152_EXPORT_COLUMNS}"
+        f"https://elite.finviz.com/export.ashx?v=152&ft=4&f={f}&o=-marketcap&c={V152_EXPORT_COLUMNS}"
     )
 
 
@@ -81,6 +81,48 @@ def _format_earnings_time_only(raw: str) -> str:
     return t if t else "—"
 
 
+def _classify_earnings_session(ed_raw: str) -> tuple[int, str]:
+    """Session sort key + display label.
+
+    Sort order: 0 = before open (BMO / morning), 1 = after close (AMC / afternoon), 2 = unknown.
+    Display uses **BMO** for FinViz BMO / 8:30 AM and **AMC** for AMC / 4:30 PM; otherwise compact time.
+    """
+    ed = (ed_raw or "").strip()
+    if not ed:
+        return (2, "—")
+    u = ed.upper()
+
+    if "BMO" in u:
+        return (0, "BMO")
+    if "AMC" in u:
+        return (1, "AMC")
+    if re.search(r"BEFORE\s+MARKET\s+OPEN", u):
+        return (0, "BMO")
+    if re.search(r"AFTER\s+(THE\s+)?(MARKET\s+)?CLOSE", u):
+        return (1, "AMC")
+    # Explicit 8:30 AM → BMO, 4:30 PM → AMC (FinViz often uses these instead of tokens)
+    if re.search(r"\b8\s*:?\s*30\b", ed, re.I) and re.search(
+        r"\bA\.?M\.?\b", ed, re.I
+    ):
+        return (0, "BMO")
+    if re.search(r"\b4\s*:?\s*30\b", ed, re.I) and re.search(
+        r"\bP\.?M\.?\b", ed, re.I
+    ):
+        return (1, "AMC")
+
+    fmt = _format_earnings_time_only(ed)
+    # Broader clock times: AM → before-open bucket, PM → after-close bucket
+    if re.search(r"\b\d{1,2}\s*:\s*\d{2}\s*A\.?M\.?\b", ed, re.I) or re.search(
+        r"\b\d{1,2}\s*A\.?M\.?\b", ed, re.I
+    ):
+        return (0, fmt)
+    if re.search(r"\b\d{1,2}\s*:\s*\d{2}\s*P\.?M\.?\b", ed, re.I) or re.search(
+        r"\b\d{1,2}\s*P\.?M\.?\b", ed, re.I
+    ):
+        return (1, fmt)
+    return (2, fmt if fmt != "—" else "—")
+
+
 def _finviz_thousands_to_shares(raw: str) -> float | None:
     """Convert FinViz volume to shares: usually **thousands**; large bare integers may be full shares."""
     if not raw:
@@ -103,6 +145,55 @@ def _finviz_thousands_to_shares(raw: str) -> float | None:
     if val >= 1_000_000:
         return val
     return val * 1000.0
+
+
+def _finviz_float_to_shares(raw: str) -> float | None:
+    """Parse FinViz **Shares Float** cell to a share count.
+
+    Unlike **volume**, bare 7-digit values are often **thousands of shares** (e.g. ``9720000`` →
+    ~9.72B), not full counts — the volume rule ``>= 1M ⇒ full shares`` would show megacaps as ~9.7M.
+
+    - ``K`` / ``M`` / ``B`` suffixes: standard multiples.
+    - Decimals without suffix (e.g. ``18.78``): millions of shares (FinViz UI convention).
+    - Plain integers ``>= 10_000_000``: treated as **full** share counts.
+    - Plain integers ``1_000_000 … 9_999_999``: treated as **thousands** (×1000).
+    - Plain integers ``< 1_000_000``: **thousands** (×1000), same as volume.
+    """
+    if not raw:
+        return None
+    s = str(raw).strip().replace(",", "")
+    if not s or s in "-—":
+        return None
+    m = re.match(r"^([\d.]+)\s*([KMB])?\s*$", s, re.I)
+    if not m:
+        return None
+    val = float(m.group(1))
+    suf = (m.group(2) or "").upper()
+    if suf == "K":
+        return val * 1e3
+    if suf == "M":
+        return val * 1e6
+    if suf == "B":
+        return val * 1e9
+    if re.match(r"^\d+\.\d+$", s) and 0 < val <= 1_000_000:
+        return val * 1e6
+    if val >= 10_000_000:
+        return val
+    if val >= 1_000_000:
+        return val * 1_000.0
+    return val * 1_000.0
+
+
+def _fmt_finviz_float_shares(raw: str) -> str:
+    """Display string for a FinViz float cell (compact K/M/B/T)."""
+    sh = _finviz_float_to_shares(raw)
+    if sh is None:
+        t = (raw or "").strip()
+        return t[:14] if t else "—"
+    au = abs(sh)
+    if au >= 1e12:
+        return f"{sh / 1e12:.2f}T"
+    return _fmt_shares_compact(sh)
 
 
 def _fmt_shares_compact(shares: float) -> str:
@@ -183,7 +274,10 @@ def _normalize_earnings_row(raw: dict) -> dict:
     vol = _cell(raw, "Volume", "volume")
     avg = _cell(raw, "Average Volume", "Avg Volume", "Average volume", "Avg Vol")
     tick = _cell(raw, "Ticker", "ticker")
+    mcap_raw = _cell(raw, "Market Cap", "market_cap", "MarketCap")
+    mcap_num = _parse_num(mcap_raw) if mcap_raw else None
     sort_d = _parse_calendar_date(ed)
+    sess_order, time_disp = _classify_earnings_session(ed)
     return {
         "ticker": tick.upper() if tick else "",
         "earnings_raw": ed,
@@ -192,6 +286,9 @@ def _normalize_earnings_row(raw: dict) -> dict:
         "volume": vol,
         "avg_vol": avg,
         "_sort_date": sort_d,
+        "_mkt_cap_num": mcap_num,
+        "_session_order": sess_order,
+        "_time_display": time_disp,
     }
 
 
@@ -210,7 +307,16 @@ def fetch_earnings_rows(
         if n["ticker"]:
             rows.append(n)
     far = date(2099, 12, 31)
-    rows.sort(key=lambda x: (x.get("_sort_date") or far, x.get("ticker") or ""))
+
+    def _row_sort_key(x: dict) -> tuple:
+        d = x.get("_sort_date") or far
+        m = x.get("_mkt_cap_num")
+        m_val = float(m) if isinstance(m, (int, float)) and m > 0 else 0.0
+        sess = int(x.get("_session_order", 2))
+        tick = (x.get("ticker") or "").upper()
+        return (d, -m_val, sess, tick)
+
+    rows.sort(key=_row_sort_key)
     screener = SCREENER_URLS[period]
     return rows[:limit], screener
 
@@ -226,8 +332,7 @@ def _table_block(rows: list[dict]) -> str:
     ]
     for r in rows:
         tk = (r.get("ticker") or "")[:6].ljust(6)
-        ed_raw = r.get("earnings_raw") or ""
-        tm = _format_earnings_time_only(ed_raw)[:tw].ljust(tw)
+        tm = (r.get("_time_display") or "—")[:tw].ljust(tw)
         pr = (r.get("price") or "")[:8].rjust(8)
         vo = _fmt_volume_cell(r.get("volume") or "")[:vw].rjust(vw)
         av = _fmt_volume_cell(r.get("avg_vol") or "")[:vw].rjust(vw)

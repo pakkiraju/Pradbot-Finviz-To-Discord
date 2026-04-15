@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Literal
 from urllib.parse import quote, urlencode
 
 from fetch_elite import _get_api_key, _normalize_row, fetch_csv_export
 from fetch_v152_universe import V152_EXPORT_COLUMNS
-from finviz_earnings import _fmt_shares_compact, _fmt_volume_cell, _finviz_thousands_to_shares
+from finviz_earnings import _fmt_finviz_float_shares, _fmt_volume_cell
 
 logger = logging.getLogger(__name__)
 
@@ -98,24 +97,8 @@ def _cell_from_raw(raw: dict, *names: str) -> str:
 
 
 def _fmt_float_shares_display(raw: str) -> str:
-    """Shares float with explicit K / M / B. Bare decimals (e.g. 18.78) are treated as millions of shares."""
-    s = (raw or "").strip().replace(",", "")
-    if not s or s in "-—":
-        return "—"
-    if re.search(r"[KMB]\s*$", s, re.I):
-        sh = _finviz_thousands_to_shares(s)
-        if sh is not None:
-            return _fmt_shares_compact(sh)
-        return s[:12]
-    # FinViz sometimes exports millions without an "M" suffix (e.g. 18.78 → 18.78M shares).
-    if re.match(r"^\d+\.\d+$", s):
-        val = float(s)
-        if 0 < val <= 1_000_000:
-            return _fmt_shares_compact(val * 1e6)
-    sh = _finviz_thousands_to_shares(s)
-    if sh is not None:
-        return _fmt_shares_compact(sh)
-    return s[:12]
+    """Shares float — parsed via :func:`finviz_earnings._fmt_finviz_float_shares`."""
+    return _fmt_finviz_float_shares(raw)
 
 
 def _enrich_smallcap_row(raw: dict, normed: dict) -> None:
