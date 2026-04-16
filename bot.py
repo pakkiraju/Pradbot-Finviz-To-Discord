@@ -667,7 +667,7 @@ async def news_command(interaction: discord.Interaction, symbol: str):
             inline=False,
         )
 
-    embed.set_footer(text="Data from FinViz Elite")
+    embed.set_footer(text="FinViz — same news list as the ticker quote page")
     await interaction.followup.send(embed=embed)
 
 

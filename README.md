@@ -11,6 +11,7 @@ This repository ships **two** standalone products that live in the same folder a
 
 ### Recent changes (at a glance)
 
+- **`/news`** — Headlines come from the **same `#news-table` list** as [Finviz’s ticker quote page](https://finviz.com/quote.ashx) (parsed HTML), not the Elite **`news_export.ashx?v=1`** CSV (that feed can differ from the quote UI). **No `FINVIZ_API_KEY` required** for normal use; if the table cannot be parsed, the bot falls back to Elite CSV when a key is set.
 - **`/econ`** — [Investing.com](https://www.investing.com/economic-calendar/) economic calendar (**US + Canada**, **medium & high** importance, all categories). **`period`** (like `/earnings`): **Today** (default) or **This week (Mon–Sun NY)**. No FinViz key. (Rare **403** — see detail section.)
 - **`/ipo`** — [IPOScoop](https://www.iposcoop.com/ipo-calendar/) IPO table (compact labeled lines; no SCOOP columns). **`period`:** **Today** (default) or **Full calendar**. No FinViz key.
 - **`/earnings`** — FinViz Elite **v=152** export with **`earningsdate_today`** / **`earningsdate_thisweek`**; export sorted **`o=-marketcap`**. Rows are reordered by **market cap (desc)**, then **session** (before-open / BMO and **8:30 AM** → **BMO**, after-close / AMC and **4:30 PM** → **AMC**, then other times). Monospace tables (ticker, **time**, price, volume, avg vol, change %). **Weekly** view groups rows under **`— Apr 10 —`**-style day headers. Embed links to the matching screener.
@@ -34,7 +35,7 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/chart MSFT` | **Timeframe** dropdown: **1m, 3m, 5m, 15m, 30m, 1h**, **Daily**, **Weekly**, **Monthly** |
 | `/gex AAPL` | **GEX** (nearest future expiry or optional date) |
 | `/zerodte AAPL` | **0DTE** OI-style analysis |
-| `/news AAPL` | Latest **5** news links |
+| `/news AAPL` | Latest **5** headlines — same list as the quote page **News** table (public Finviz HTML); Elite CSV only as fallback |
 | `/econ` | **Investing.com** — **`period`:** Today (default) or this week Mon–Sun NY; US+CA, medium/high |
 | `/ipo` | **IPOScoop** — **`period`:** Today (default) or full calendar |
 | `/quote AAPL` | Chart + OHLCV + **P/E**, **Mkt Cap**, **Float**, **Short Float**, **Sector**, **Industry** + recent days + headlines (v=152 snapshot; cap/float compact **K/M/B/T**) |
@@ -49,7 +50,7 @@ Interactive **slash-command** bot: charts, options, news, quotes, channel purge,
 | `/purge` | Delete messages (count or **all**); confirms **all** with buttons; replies warn that deletion is permanent |
 | `/help` | Command list (grouped); optional **Documentation** link when **`README_URL`** is set — no host/API-key boilerplate in the embed |
 
-Charts and FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**) is required for **`/inplay`** with **`scanner: Earnings`** and for **`/top_opps`** **execution study** mode (entry + stop). **`/purge`**, **`/evsize`**, **`/econ`**, and **`/ipo`** do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
+Charts and most FinViz data require a **FinViz Elite** subscription and **`FINVIZ_API_KEY`** in `.env`. **`/news`** uses the public quote page and does **not** need a key unless the HTML fallback fails and you want Elite CSV backup. **`MASSIVE_API_KEY`** (or **`POLYGON_API_KEY`**) is required for **`/inplay`** with **`scanner: Earnings`** and for **`/top_opps`** **execution study** mode (entry + stop). **`/purge`**, **`/evsize`**, **`/econ`**, **`/ipo`**, and **`/news`** (typical path) do not need a FinViz key (`/purge` / `/evsize` need appropriate Discord permissions).
 
 ### PradBot — setup
 
@@ -70,7 +71,7 @@ cp .env.example .env
 Put these in `.env`:
 
 - **`DISCORD_BOT_TOKEN`** — required. From the Developer Portal (**Bot** → token).
-- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/news`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). Not needed if you only use **`/purge`**, **`/evsize`**, **`/econ`** and **`/ipo`** (the bot still needs the Discord token to start).
+- **`FINVIZ_API_KEY`** — required for FinViz-backed commands (`/chart`, `/gex`, `/zerodte`, `/quote`, `/scans`, `/top_gainers`, `/top_losers`, `/earnings`, `/inplay`, `/heatmap`, …). **`/news`** works without it (quote-page HTML); optional for CSV fallback if parsing fails. Not needed if you only use **`/purge`**, **`/evsize`**, **`/econ`**, **`/ipo`**, and **`/news`** (the bot still needs the Discord token to start).
 - **`MASSIVE_API_KEY`** — required for **`/inplay`** with **`scanner: Earnings`** (extended-hours volume vs 21-day avg) and for **`/top_opps`** when you pass **entry** + **stop** (Massive aggregates + **mplfinance** charts). [Massive](https://massive.com) REST (`api.massive.com`). You can use **`POLYGON_API_KEY`** instead (same token after Polygon → Massive rebrand).
 - **`README_URL`** (optional) — Public URL to your repo **README** (e.g. `https://github.com/org/repo#readme`). Used by **`/help`** as the documentation link. In a local **`.env`**, wrap the value in **quotes** if it contains `#`. On **Railway**, enter the URL **without** extra quote characters in the value field (the bot strips accidental surrounding quotes). Aliases: **`GITHUB_README_URL`**, **`DOCS_URL`**.
 - **`GUILD_ID`** (optional) — **test server ID(s)** for **instant** slash updates; **by default** the bot registers **only on those guilds** (no global) so you do not see duplicate slash commands (see **§5**). Set **`SLASH_SYNC_GLOBAL_ALSO=1`** to also sync globally. Use **`SLASH_GUILD_ONLY=1`** to force guild-only if you use **`SLASH_SYNC_GLOBAL_ALSO`** but need to override. Leave **`GUILD_ID`** blank for **global‑only** registration.
@@ -153,7 +154,7 @@ All commands use `/`. Dropdown parameters are shown in **bold**.
 | `/chart <symbol> [timeframe]` | FinViz chart (**timeframe:** 1m–1h intraday, Daily, Weekly, Monthly) |
 | `/gex <symbol> [expiry]` | GEX / options (optional YYYY-MM-DD) |
 | `/zerodte <symbol>` | 0DTE analysis |
-| `/news <symbol>` | 5 articles with links |
+| `/news <symbol>` | **5** headlines from the quote page **News** table (same order as Finviz); Elite CSV fallback if parse fails and key is set |
 | `/econ [period]` | Investing.com (US+CA, medium/high); **period** = today (default) or week; no `FINVIZ_API_KEY` |
 | `/ipo [period]` | IPOScoop (no SCOOP columns); **period** = today (default) or full calendar; no `FINVIZ_API_KEY` |
 | `/quote <symbol>` | Quote + chart + news + **P/E**, **Mkt Cap**, **Float**, **Short Float**, **Sector**, **Industry** (Elite v=152) |
@@ -238,7 +239,7 @@ Reply can be **ephemeral** with a **Post to channel** button (in servers) or **p
 
 **What `/ipo` shows:** **`period`:** **Today** (default) filters IPOScoop rows where the **first date** in *Expected to Trade* matches **today** in **US Eastern**. **Full calendar** shows the whole public table. Compact labeled lines; **`---`** between companies; no SCOOP columns. **`ipo_calendar.py`**. No `FINVIZ_API_KEY`.
 
-**What `/news` shows:** Headlines and links.
+**What `/news` shows:** Up to **5** headlines with links and source labels, in the **same order** as the **News** table on **`finviz.com/quote.ashx?t=…`** (HTML parse of `#news-table`). The Elite **`news_export.ashx?v=1`** CSV is **not** used as the primary source because it can disagree with that list. If the table cannot be read, the bot falls back to **`elite.finviz.com/news_export.ashx`** when **`FINVIZ_API_KEY`** is set. No FinViz key needed for the usual path.
 
 **What `/quote` shows:** Daily chart, **OHLCV** and **change** from `finviz_quote`, plus a **v=152** row (`finviz_v152_ticker.fetch_v152_ticker_snapshot`): **P/E**, **Mkt Cap** (compact **K/M/B/T**; plain FinViz cells without a suffix → **millions of USD**), **Float** and **Short Float** (float uses **`_fmt_finviz_float_shares`**, not volume scaling), **Sector**, **Industry**, **Recent Days** monospace block, and **headlines**.
 

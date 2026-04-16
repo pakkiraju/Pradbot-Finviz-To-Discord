@@ -1,9 +1,11 @@
-"""Fetch latest news articles for a ticker from FinViz Elite.
+"""Fetch latest news articles for a ticker from Finviz (quote page).
 
-Uses the news export endpoint:
-  https://elite.finviz.com/news_export.ashx?v=1&t=SYMBOL&auth=KEY
+The Elite CSV endpoint ``news_export.ashx?v=1&t=SYMBOL`` returns a broad news stream
+that does not match the ticker-specific list on the stock quote page. To align with
+what users see when they open ``quote.ashx?t=...``, we parse the ``#news-table`` block
+from that page (same rows as the Finviz UI).
 
-Returns parsed NewsArticle objects sorted by date descending (newest first).
+Legacy CSV export is used only as a fallback if the table cannot be parsed.
 """
 
 import csv
@@ -12,8 +14,10 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import requests
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +47,99 @@ def _get_api_key() -> str | None:
 
 
 def fetch_news(symbol: str, limit: int = 5) -> list[NewsArticle]:
-    """Fetch the latest news articles for *symbol* from FinViz Elite.
+    """Fetch the latest news articles for *symbol* (newest-first, up to *limit*).
 
-    Returns up to *limit* articles sorted newest-first.
+    Primary source is the quote page news table — the same list as on Finviz's
+    ticker page. Falls back to Elite CSV export only if parsing yields no rows.
     """
+    articles = _fetch_news_from_quote_page(symbol, limit)
+    if articles:
+        return articles
+
+    logger.info("[news:%s] quote page parse empty; trying news_export CSV fallback", symbol)
+    return _fetch_news_csv(symbol, limit)
+
+
+def _fetch_news_from_quote_page(symbol: str, limit: int) -> list[NewsArticle]:
+    """Parse ``#news-table`` from ``finviz.com/quote.ashx``."""
+    t = quote(symbol.strip().upper(), safe="")
+    url = f"https://finviz.com/quote.ashx?t={t}"
+    logger.info("[news:%s] fetching quote page %s", symbol, url)
+
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=30)
+            if resp.status_code == 429:
+                wait = (2**attempt) * 15
+                logger.warning(
+                    "[news:%s] 429 rate limit, waiting %ds (attempt %d)",
+                    symbol,
+                    wait,
+                    attempt + 1,
+                )
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            logger.warning("[news:%s] request failed: %s (attempt %d)", symbol, e, attempt + 1)
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep((2**attempt) * 5)
+            continue
+    else:
+        logger.error("[news:%s] quote page failed after %d retries", symbol, _MAX_RETRIES)
+        return []
+
+    text = resp.text
+    if not text.strip():
+        return []
+
+    soup = BeautifulSoup(text, "html.parser")
+    table = soup.find("table", id="news-table")
+    if not table:
+        logger.warning("[news:%s] no #news-table in quote HTML", symbol)
+        return []
+
+    articles: list[NewsArticle] = []
+    for row in table.find_all("tr"):
+        link = row.find("a", class_="tab-link-news")
+        if not link:
+            continue
+        href = (link.get("href") or "").strip()
+        title = link.get_text(strip=True)
+        if not href or not title:
+            continue
+
+        date_str = ""
+        tds = row.find_all("td", recursive=False)
+        if tds:
+            date_str = tds[0].get_text(strip=True)
+
+        source = ""
+        right = row.find("div", class_="news-link-right")
+        if right:
+            sp = right.find("span")
+            if sp:
+                source = sp.get_text(strip=True).strip().strip("()")
+
+        articles.append(
+            NewsArticle(
+                title=title,
+                source=source,
+                date=date_str,
+                url=href,
+                category="",
+            )
+        )
+        if len(articles) >= limit:
+            break
+
+    logger.info("[news:%s] parsed %d articles from quote page", symbol, len(articles))
+    return articles
+
+
+def _fetch_news_csv(symbol: str, limit: int) -> list[NewsArticle]:
+    """Elite ``news_export.ashx`` — fallback only; may not match quote page ordering."""
     api_key = _get_api_key()
     if not api_key:
         logger.error("FINVIZ_API_KEY not set. Add it in Railway → service → Variables.")
@@ -59,8 +152,13 @@ def fetch_news(symbol: str, limit: int = 5) -> list[NewsArticle]:
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=30)
             if resp.status_code == 429:
-                wait = (2 ** attempt) * 15
-                logger.warning("[news:%s] 429 rate limit, waiting %ds (attempt %d)", symbol, wait, attempt + 1)
+                wait = (2**attempt) * 15
+                logger.warning(
+                    "[news:%s] 429 rate limit, waiting %ds (attempt %d)",
+                    symbol,
+                    wait,
+                    attempt + 1,
+                )
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
@@ -68,26 +166,26 @@ def fetch_news(symbol: str, limit: int = 5) -> list[NewsArticle]:
         except requests.RequestException as e:
             logger.warning("[news:%s] request failed: %s (attempt %d)", symbol, e, attempt + 1)
             if attempt < _MAX_RETRIES - 1:
-                time.sleep((2 ** attempt) * 5)
+                time.sleep((2**attempt) * 5)
             continue
     else:
-        logger.error("[news:%s] failed after %d retries", symbol, _MAX_RETRIES)
+        logger.error("[news:%s] CSV failed after %d retries", symbol, _MAX_RETRIES)
         return []
 
-    text = resp.text.strip().lstrip("\ufeff")
+    raw = resp.text.strip().lstrip("\ufeff")
 
-    if not text:
-        logger.warning("[news:%s] empty response from FinViz", symbol)
+    if not raw:
+        logger.warning("[news:%s] empty response from FinViz CSV", symbol)
         return []
 
-    if text.startswith("<"):
-        if "login" in text[:2000].lower() or "sign in" in text[:2000].lower():
+    if raw.startswith("<"):
+        if "login" in raw[:2000].lower() or "sign in" in raw[:2000].lower():
             logger.error("[news:%s] FinViz returned login page — check FINVIZ_API_KEY", symbol)
         else:
             logger.warning("[news:%s] got HTML instead of CSV", symbol)
         return []
 
-    return _parse_csv(text, symbol, limit)
+    return _parse_csv(raw, symbol, limit)
 
 
 def _parse_csv(text: str, symbol: str, limit: int) -> list[NewsArticle]:
@@ -125,13 +223,15 @@ def _parse_csv(text: str, symbol: str, limit: int) -> list[NewsArticle]:
         if not title or not article_url:
             continue
 
-        articles.append(NewsArticle(
-            title=title,
-            source=mapped.get("source", ""),
-            date=mapped.get("date", ""),
-            url=article_url,
-            category=mapped.get("category", ""),
-        ))
+        articles.append(
+            NewsArticle(
+                title=title,
+                source=mapped.get("source", ""),
+                date=mapped.get("date", ""),
+                url=article_url,
+                category=mapped.get("category", ""),
+            )
+        )
 
-    logger.info("[news:%s] parsed %d articles", symbol, len(articles))
+    logger.info("[news:%s] parsed %d articles from CSV", symbol, len(articles))
     return articles[:limit]
