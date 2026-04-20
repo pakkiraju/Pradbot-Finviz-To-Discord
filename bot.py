@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz AMC/BMO + Massive %EAVOL, fundamentals embed). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz AMC/BMO + Massive %EAVOL, fundamentals embed). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /top_moc_movers uses moc_movers (Massive grouped daily + minute aggregates + trades) for MOC-style moves into 4:00 PM ET; no FinViz key. /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
 """
 
 import logging
@@ -168,6 +168,7 @@ from inplay_earnings import (
     fetch_inplay_earnings_rows,
 )
 from massive_rest import get_massive_api_key
+from moc_movers import build_moc_movers_report, resolve_default_session_date
 from symbol_list import format_tickers_csv
 from top_opps_charts import build_study_charts, resolve_default_exit_for_top_opps, study_levels_as_embed_fields
 from notion_top_opps import build_top_opps_payload, create_notion_page, notion_top_opps_ready
@@ -423,6 +424,7 @@ def _help_embed() -> discord.Embed:
             "`/top_gainers` — optional **min_price**, **min_volume**\n"
             "`/top_losers` — optional **min_price**, **min_volume**\n"
             "`/ah_movers` — top 5 AH +3%+ and -3%+ (Elite liquidity filters)\n"
+            "`/top_moc_movers` — optional **session_date**, **top_n** (Massive / Polygon)\n"
             "`/top_opps` — `symbol` · optional **entry**, **stop**, **exit**, **notes**"
         ),
         inline=False,
@@ -1124,6 +1126,159 @@ def _build_ah_movers_embed(
     )
     embed.set_footer(text="Data from FinViz Elite  |  AH ±3%, avg vol >1k, price >$1")
     return embed
+
+
+_MOC_FIELD_MAX = 1010
+
+
+def _parse_session_date_arg(raw: str | None) -> date | None:
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        return datetime.strptime(str(raw).strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _moc_block_350(rows: list[dict]) -> str:
+    if not rows:
+        return "*None.*"
+    lines = [f"{'Sym':<6} {'Move%':>9}", "-" * 17]
+    for r in rows:
+        sym = (r.get("ticker") or "?")[:6].ljust(6)
+        p = r.get("pct_350_400")
+        lines.append(f"{sym} {p:+.2f}%" if p is not None else f"{sym} {'—':>9}")
+    text = "\n".join(lines)
+    if len(text) > _MOC_FIELD_MAX:
+        text = text[: _MOC_FIELD_MAX - 3] + "..."
+    return f"```\n{text}\n```"
+
+
+def _moc_block_refined(rows: list[dict]) -> str:
+    if not rows:
+        return "*None (no trade-refined rows).*"
+    lines = [f"{'Sym':<6} {'Trades%':>9} {'1mO/C%':>9}", "-" * 25]
+    for r in rows:
+        sym = (r.get("ticker") or "?")[:6].ljust(6)
+        tr = r.get("pct_refined")
+        px = r.get("pct_1m_proxy")
+        a = f"{tr:+.2f}%" if tr is not None else "—"
+        b = f"{px:+.2f}%" if px is not None else "—"
+        lines.append(f"{sym} {a:>9} {b:>9}")
+    text = "\n".join(lines)
+    if len(text) > _MOC_FIELD_MAX:
+        text = text[: _MOC_FIELD_MAX - 3] + "..."
+    return f"```\n{text}\n```"
+
+
+def _moc_block_1m(rows: list[dict]) -> str:
+    if not rows:
+        return "*None.*"
+    lines = [f"{'Sym':<6} {'1m O/C%':>9}", "-" * 17]
+    for r in rows:
+        sym = (r.get("ticker") or "?")[:6].ljust(6)
+        px = r.get("pct_1m_proxy")
+        lines.append(f"{sym} {px:+.2f}%" if px is not None else f"{sym} {'—':>9}")
+    text = "\n".join(lines)
+    if len(text) > _MOC_FIELD_MAX:
+        text = text[: _MOC_FIELD_MAX - 3] + "..."
+    return f"```\n{text}\n```"
+
+
+def _moc_copy_symbols(report: dict) -> str:
+    seen: set[str] = set()
+    parts: list[str] = []
+    for key in ("top_350_400", "top_refined", "top_1m_proxy"):
+        for r in report.get(key) or []:
+            t = (r.get("ticker") or "").strip().upper()
+            if t and t not in seen:
+                seen.add(t)
+                parts.append(t)
+    return ",".join(parts)
+
+
+@tree.command(
+    name="top_moc_movers",
+    description="Largest moves into the 4:00 PM ET close (Massive minute + trade refinement).",
+)
+@app_commands.describe(
+    session_date="Trading session YYYY-MM-DD (default: last completed session)",
+    top_n="Names per leaderboard (1–25, default 10)",
+)
+async def top_moc_movers_command(
+    interaction: discord.Interaction,
+    session_date: str | None = None,
+    top_n: int = 10,
+):
+    if not get_massive_api_key():
+        await interaction.response.send_message(
+            "Set **MASSIVE_API_KEY** (or **POLYGON_API_KEY**) in Railway Variables to use `/top_moc_movers`.",
+            ephemeral=True,
+        )
+        return
+
+    parsed = _parse_session_date_arg(session_date)
+    if session_date and str(session_date).strip() and parsed is None:
+        await interaction.response.send_message(
+            "Invalid **session_date**. Use **YYYY-MM-DD** (example: `2026-04-17`).",
+            ephemeral=True,
+        )
+        return
+
+    tn = max(1, min(25, int(top_n)))
+
+    await interaction.response.defer()
+    d0 = parsed or resolve_default_session_date()
+    report = await asyncio.to_thread(build_moc_movers_report, d0, top_n=tn)
+
+    if report.get("error"):
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="Top MOC movers",
+                description=report["error"],
+                color=0xED4245,
+            )
+        )
+        logger.info("top_moc_movers error for %s: %s", interaction.user, report.get("error"))
+        return
+
+    desc = (
+        f"**Session** `{report['session']}` (ET) · **Universe** {report['universe_size']} (liquid by prior-day vol cap) · "
+        f"**Minute OK** {report['minute_ok']} · **Refine pool** {report['refine_candidates']} (top |1m| for trades)\n"
+        "**3:50→4:00** = close(3:50 bar) → close(3:59 bar). **Trades** = last print ≤3:59:45 vs last ≤4:00:00 (see README). **1m O/C** = last RTH minute bar."
+    )
+    embed = discord.Embed(
+        title="Top MOC movers",
+        description=desc[:4096],
+        color=0x06B6D4,
+    )
+    embed.add_field(
+        name="Largest |move| — 3:50 close → 4:00 close",
+        value=_moc_block_350(report.get("top_350_400") or [])[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Trades — 3:59:45 → ~4:00 (refined from top |last-minute 1m|)",
+        value=_moc_block_refined(report.get("top_refined") or [])[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Last RTH minute — 1m bar open → close (proxy)",
+        value=_moc_block_1m(report.get("top_1m_proxy") or [])[:1024],
+        inline=False,
+    )
+    embed.set_footer(
+        text="Massive/Polygon · MOC_MAX_TICKERS env · FinViz not required"
+    )
+    await interaction.followup.send(embed=embed)
+    csv = _moc_copy_symbols(report)
+    if csv:
+        await _followup_copy_symbols_embed(
+            interaction,
+            csv,
+            footer="Top MOC movers — combined symbols from leaderboards",
+        )
+    logger.info("top_moc_movers session=%s for %s", report.get("session"), interaction.user)
 
 
 @tree.command(name="top_gainers", description="Top 10 gaining stocks today (sorted by change %)")
