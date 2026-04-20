@@ -1,4 +1,4 @@
-"""Massive (Polygon-compatible) REST client — aggregates only, no WebSockets."""
+"""Massive (Polygon-compatible) REST client — aggregates, grouped daily, and trades."""
 
 from __future__ import annotations
 
@@ -9,6 +9,13 @@ from typing import Any
 from urllib.parse import urlencode
 
 import requests
+
+try:
+    import certifi
+
+    _TLS_VERIFY: str | bool = certifi.where()
+except ImportError:
+    _TLS_VERIFY = True
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +49,19 @@ def _auth_headers() -> dict[str, str]:
 
 
 def get_json(url: str, *, caller: str = "", timeout: float = 120.0) -> dict[str, Any] | None:
-    """GET JSON; retries on 429/5xx. *url* may be absolute (including next_url)."""
+    """GET JSON; retries on 429/5xx. *url* may be absolute (including next_url).
+
+    Uses an explicit CA bundle (``certifi``) when available so Windows / Store Python
+    verifies TLS to ``api.massive.com`` instead of triggering urllib3's unverified-request path.
+    """
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = requests.get(url, headers=_auth_headers(), timeout=timeout)
+            resp = requests.get(
+                url,
+                headers=_auth_headers(),
+                timeout=timeout,
+                verify=_TLS_VERIFY,
+            )
             if resp.status_code == 429:
                 wait = (2**attempt) * 15
                 logger.warning("[%s] Massive 429, waiting %ds (attempt %d)", caller, wait, attempt + 1)
@@ -146,6 +162,42 @@ def fetch_hour_bars(
 ) -> list[dict[str, Any]]:
     """Hourly OHLCV bars (Unix ms range)."""
     return fetch_aggregate_bars(ticker, 1, "hour", from_ms, to_ms, caller=caller)
+
+
+def fetch_grouped_daily(
+    session_date: str,
+    *,
+    include_otc: bool = False,
+    caller: str = "grouped_daily",
+) -> list[dict[str, Any]]:
+    """All U.S. stocks for *session_date* (YYYY-MM-DD). One or more pages; ``results`` rows have ``T``, ``o``, ``h``, ``l``, ``c``, ``v``, ``t`` (ms)."""
+    path = f"/v2/aggs/grouped/locale/us/market/stocks/{session_date}"
+    q = urlencode({"adjusted": "true", "include_otc": "true" if include_otc else "false"})
+    first = f"{MASSIVE_BASE}{path}?{q}"
+    return _collect_results(first, caller=caller)
+
+
+def fetch_trades(
+    ticker: str,
+    gte_ns: int,
+    lte_ns: int,
+    *,
+    limit: int = 50000,
+    caller: str = "massive_trades",
+) -> list[dict[str, Any]]:
+    """Tick trades in ``[gte_ns, lte_ns]`` (Unix **nanoseconds**). Sorted ascending by timestamp."""
+    path = f"/v3/trades/{ticker}"
+    q = urlencode(
+        {
+            "timestamp.gte": str(gte_ns),
+            "timestamp.lte": str(lte_ns),
+            "limit": str(min(limit, 50000)),
+            "sort": "timestamp",
+            "order": "asc",
+        }
+    )
+    first = f"{MASSIVE_BASE}{path}?{q}"
+    return _collect_results(first, caller=caller)
 
 
 def sum_minute_volume(ticker: str, start_ms: int, end_ms: int, *, caller: str) -> float:
