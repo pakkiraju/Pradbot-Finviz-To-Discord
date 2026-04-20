@@ -12,7 +12,12 @@ from zoneinfo import ZoneInfo
 
 from fetch_elite import _get_api_key, _normalize_row, _parse_num, fetch_csv_export
 from fetch_v152_universe import V152_EXPORT_COLUMNS
-from finviz_earnings import _fmt_shares_compact, _fmt_volume_cell, _finviz_thousands_to_shares
+from finviz_earnings import (
+    _classify_earnings_session,
+    _fmt_shares_compact,
+    _fmt_volume_cell,
+    _finviz_thousands_to_shares,
+)
 from finviz_inplay import _fmt_float_shares_display
 from massive_rest import (
     fetch_daily_bars,
@@ -27,7 +32,7 @@ ET = ZoneInfo("America/New_York")
 EARNINGS_F = "earningsdate_yesterdayafter|todaybefore,sh_avgvol_o1000,sh_price_o1"
 
 INPLAY_EARNINGS_CANDIDATE_CAP = 150
-_DISPLAY_FIELD_ROWS = 8
+INPLAY_EARNINGS_MAX_DISPLAY = 10
 _MAX_WORKERS = 8
 
 # EAVOL tier thresholds (for emoji)
@@ -447,7 +452,13 @@ def _enrich_one_ticker(
             return out
         ah = sum_minute_volume(ticker, ah_lo, ah_hi, caller=f"eavol_ah_{ticker}")
         pm = sum_minute_volume(ticker, pm_lo, pm_hi, caller=f"eavol_pm_{ticker}")
-        ext = ah + pm
+        ed_raw = (normed.get("earnings_date") or "").strip() or _cell_from_raw(
+            raw, "Earnings Date", "Earnings"
+        )
+        sess_order, _ = _classify_earnings_session(ed_raw)
+        # BMO (today pre-market): only today's pre-market vs 21d ADV — exclude prior AH.
+        # AMC (yesterday after-hours) or unknown: prior AH + today PM (unchanged).
+        ext = pm if sess_order == 0 else ah + pm
         out["pct_eavol"] = (ext / avg) * 100.0
     except Exception as e:
         logger.warning("inplay_earnings %s: %s", ticker, e)
@@ -525,7 +536,7 @@ def build_inplay_earnings_embed_fields(rows: list[dict[str, Any]]) -> list[tuple
     if not rows:
         return []
     out: list[tuple[str, str]] = []
-    for r in rows[:_DISPLAY_FIELD_ROWS]:
+    for r in rows[:INPLAY_EARNINGS_MAX_DISPLAY]:
         tk = (r.get("ticker") or "?").strip()
         emoji = eavol_tier_emoji(r.get("pct_eavol"))
         peav = r.get("pct_eavol")

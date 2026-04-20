@@ -162,8 +162,13 @@ from finviz_inplay import (
     format_inplay_smallcap_description,
 )
 from finviz_ah_movers import fetch_ah_movers_pair
-from inplay_earnings import build_inplay_earnings_embed_fields, fetch_inplay_earnings_rows
+from inplay_earnings import (
+    INPLAY_EARNINGS_MAX_DISPLAY,
+    build_inplay_earnings_embed_fields,
+    fetch_inplay_earnings_rows,
+)
 from massive_rest import get_massive_api_key
+from symbol_list import format_tickers_csv
 from top_opps_charts import build_study_charts, resolve_default_exit_for_top_opps, study_levels_as_embed_fields
 from notion_top_opps import build_top_opps_payload, create_notion_page, notion_top_opps_ready
 from heatmap_pipeline import build_daily_heatmaps
@@ -193,6 +198,38 @@ _INPLAY_SCANNER_CHOICES = [
     app_commands.Choice(name="Earnings", value="earnings"),
 ]
 
+_COPY_SYMBOLS_DESC_MAX_INNER = 3900
+
+
+def _truncate_csv_for_discord_embed(csv: str, max_inner: int = _COPY_SYMBOLS_DESC_MAX_INNER) -> str:
+    if len(csv) <= max_inner:
+        return csv
+    cut = csv[:max_inner]
+    if "," in cut:
+        cut = cut.rsplit(",", 1)[0]
+    return cut + "…"
+
+
+async def _followup_copy_symbols_embed(
+    interaction: discord.Interaction,
+    csv: str,
+    *,
+    footer: str | None = None,
+) -> None:
+    """Second message: comma-separated tickers in a code block (TradingView, etc.)."""
+    csv = (csv or "").strip()
+    if not csv:
+        return
+    inner = _truncate_csv_for_discord_embed(csv)
+    copy_embed = discord.Embed(
+        title="Copy — symbols (comma-separated)",
+        description=f"```{inner}```",
+        color=0x06B6D4,
+    )
+    if footer:
+        copy_embed.set_footer(text=footer[:2048])
+    await interaction.followup.send(embed=copy_embed)
+
 
 async def _followup_scan_embeds(interaction: discord.Interaction, scan_def) -> tuple[int, int]:
     """Fetch one scan and post embed(s). Returns (row_count, embed_count)."""
@@ -202,6 +239,13 @@ async def _followup_scan_embeds(interaction: discord.Interaction, scan_def) -> t
     await interaction.followup.send(embed=embeds[0])
     for emb in embeds[1:]:
         await interaction.followup.send(embed=emb)
+    sym_csv = format_tickers_csv(rows)
+    if sym_csv:
+        await _followup_copy_symbols_embed(
+            interaction,
+            sym_csv,
+            footer=f"{scan_def.title[:180]} · FinViz Elite scan",
+        )
     return len(rows), len(embeds)
 
 
@@ -783,6 +827,14 @@ async def ipo_command(interaction: discord.Interaction, period: str = "today"):
     await interaction.followup.send(embed=embeds[0], view=IPOScoopCalendarView(IPO_CALENDAR_URL))
     for emb in embeds[1:]:
         await interaction.followup.send(embed=emb)
+    ipo_symbol_rows = rows if period == "all" else today_rows
+    ipo_csv = format_tickers_csv(ipo_symbol_rows, key="symbol")
+    if ipo_csv:
+        await _followup_copy_symbols_embed(
+            interaction,
+            ipo_csv,
+            footer="IPO proposed symbols (IPOScoop) · TBA/blank omitted",
+        )
     shown = len(rows) if period == "all" else len(today_rows)
     logger.info(
         "ipo period=%s for %s (%d shown / %d fetched, %d embeds)",
@@ -1096,6 +1148,12 @@ async def top_gainers_command(
     )
     embed = _build_movers_embed("gainers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
+    if rows:
+        await _followup_copy_symbols_embed(
+            interaction,
+            format_tickers_csv(rows),
+            footer="Top gainers · FinViz Elite",
+        )
     logger.info("top_gainers: %d rows for %s", len(rows), interaction.user)
 
 
@@ -1121,6 +1179,12 @@ async def top_losers_command(
     )
     embed = _build_movers_embed("losers", rows, screener_url, min_price, min_volume)
     await interaction.followup.send(embed=embed)
+    if rows:
+        await _followup_copy_symbols_embed(
+            interaction,
+            format_tickers_csv(rows),
+            footer="Top losers · FinViz Elite",
+        )
     logger.info("top_losers: %d rows for %s", len(rows), interaction.user)
 
 
@@ -1139,6 +1203,13 @@ async def ah_movers_command(interaction: discord.Interaction):
     (up_rows, screener_up), (down_rows, screener_dn) = await asyncio.to_thread(fetch_ah_movers_pair)
     embed = _build_ah_movers_embed(up_rows, down_rows, screener_up, screener_dn)
     await interaction.followup.send(embed=embed)
+    ah_csv = format_tickers_csv(up_rows + down_rows)
+    if ah_csv:
+        await _followup_copy_symbols_embed(
+            interaction,
+            ah_csv,
+            footer="AH movers (+3% list first, then −3%) · FinViz Elite",
+        )
     logger.info(
         "ah_movers: up=%d down=%d for %s",
         len(up_rows),
@@ -1184,9 +1255,20 @@ async def inplay_command(
                 color=0x06B6D4,
             )
         else:
+            if len(rows) > INPLAY_EARNINGS_MAX_DISPLAY:
+                earnings_desc = (
+                    f"Showing top **{INPLAY_EARNINGS_MAX_DISPLAY}** of **{len(rows)}** by **%EAVOL**. "
+                    "**BMO** (pre-market) names: today 4:00–9:30 AM ET vs 21d average daily volume. "
+                    "**AMC** (yesterday after-hours) names: prior 4:00–8:00 PM ET plus today pre-market vs 21d ADV."
+                )
+            else:
+                earnings_desc = (
+                    "Sorted by **%EAVOL**. **BMO** names use today pre-market volume only vs 21d ADV; "
+                    "**AMC** names use prior after-hours plus today pre-market vs 21d ADV."
+                )
             embed = discord.Embed(
                 title=title,
-                description="Sorted by **%EAVOL** (extended-hours volume vs 21-day average daily volume).",
+                description=earnings_desc,
                 url=screener_url,
                 color=0x06B6D4,
             )
@@ -1196,6 +1278,13 @@ async def inplay_command(
             text="FinViz Elite + Massive · 🔥 EAVOL ≥50% · 🟡 20–49% · ⬜ <20%"
         )
         await interaction.followup.send(embed=embed)
+        if rows:
+            await _followup_copy_symbols_embed(
+                interaction,
+                format_tickers_csv(rows),
+                footer="All tickers from this screen, highest %EAVOL first · main embed shows top "
+                f"{INPLAY_EARNINGS_MAX_DISPLAY} in full detail",
+            )
         logger.info("inplay (earnings): %d rows for %s", len(rows), interaction.user)
         return
 
@@ -1223,6 +1312,12 @@ async def inplay_command(
     )
     embed.set_footer(text=footer)
     await interaction.followup.send(embed=embed)
+    if rows:
+        await _followup_copy_symbols_embed(
+            interaction,
+            format_tickers_csv(rows),
+            footer=f"{title[:120]} · FinViz Elite",
+        )
     logger.info("inplay (%s): %d rows for %s", mode, len(rows), interaction.user)
 
 
@@ -1261,6 +1356,12 @@ async def earnings_command(
     )
     embed.set_footer(text="FinViz Elite • v=152 export")
     await interaction.followup.send(embed=embed)
+    if rows:
+        await _followup_copy_symbols_embed(
+            interaction,
+            format_tickers_csv(rows),
+            footer=f"{title[:120]} · FinViz Elite",
+        )
     logger.info("earnings %s: %d rows for %s", p, len(rows), interaction.user)
 
 
