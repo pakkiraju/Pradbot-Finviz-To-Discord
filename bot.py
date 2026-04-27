@@ -7,7 +7,7 @@ Optional GUILD_ID: instant guild sync on those server(s). Default is guild-only 
 servers do not see duplicate slash entries. Set SLASH_SYNC_GLOBAL_ALSO=1 for dual sync (guild + global).
 SLASH_GUILD_ONLY=1 overrides that and keeps guild-only only. If GUILD_ID is unset, commands sync globally only.
 
-/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz AMC/BMO + Massive %EAVOL, fundamentals embed). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /top_moc_movers uses moc_movers (Massive grouped daily + minute aggregates + trades) for MOC-style moves into 4:00 PM ET; no FinViz key. /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
+/scans uses fetch_elite.fetch_scan (same pipeline as post_scans_elite.py). /heatmap uses heatmap_pipeline.build_daily_heatmaps (index universe only). /earnings uses finviz_earnings (Elite v=152 export + earningsdate_today / thisweek filters). /inplay uses finviz_inplay (default: news + liquidity + News URL, screener v=151; Small caps: v=152 screener + News URL, extra float/cap columns; Earnings: FinViz AMC/BMO + Massive %EAVOL, fundamentals embed). /ah_movers uses finviz_ah_movers (Elite v=151 exports: AH ±3%, top 5 each, Symbol / Change / Vol / AH Change). /top_moc_movers uses moc_movers (grouped daily by dollar or share volume, last-10m notional + 10m RVOL vs prior RTH, composite-ranked moves, trades) into 4:00 PM ET; no FinViz key. /econ and /ipo use a **period** option like /earnings (default **today**): Investing.com econ (US+CA, medium+high) or IPOScoop IPO table; **week**/**full calendar** vs **today**. /chart uses finviz_chart (1m–1h + D/W/M via chart.ashx p=). /top_opps posts four charts (1m/5m/1h/d) plus a v=152 snapshot embed (same 5-day table style as /quote); optional entry/stop/exit (if exit omitted: last trade before 4pm ET, regular session close after), optional **notes** on last chart embed; Massive OHLC study charts when entry+stop set. /help lists commands and links README_URL when set.
 """
 
 import logging
@@ -1131,6 +1131,25 @@ def _build_ah_movers_embed(
 _MOC_FIELD_MAX = 1010
 
 
+def _moc_fmt_notional(n: float | None) -> str:
+    if n is None:
+        return "—"
+    x = float(n)
+    if x >= 1e9:
+        return f"{x / 1e9:.2f}B"
+    if x >= 1e6:
+        return f"{x / 1e6:.1f}M"
+    if x >= 1e3:
+        return f"{x / 1e3:.0f}K"
+    return f"{x:.0f}"
+
+
+def _moc_fmt_rvol(r: float | None) -> str:
+    if r is None:
+        return "—"
+    return f"{float(r):.2f}"
+
+
 def _parse_session_date_arg(raw: str | None) -> date | None:
     if not raw or not str(raw).strip():
         return None
@@ -1143,11 +1162,17 @@ def _parse_session_date_arg(raw: str | None) -> date | None:
 def _moc_block_350(rows: list[dict]) -> str:
     if not rows:
         return "*None.*"
-    lines = [f"{'Sym':<6} {'Move%':>9}", "-" * 17]
+    lines = [
+        f"{'Sym':<6} {'Move%':>8} {'$10m':>8} {'RV10':>5}",
+        "-" * 31,
+    ]
     for r in rows:
         sym = (r.get("ticker") or "?")[:6].ljust(6)
         p = r.get("pct_350_400")
-        lines.append(f"{sym} {p:+.2f}%" if p is not None else f"{sym} {'—':>9}")
+        mov = f"{p:+.2f}%" if p is not None else f"{'—':>8}"
+        n10 = _moc_fmt_notional(r.get("notional_10m"))
+        rv = _moc_fmt_rvol(r.get("rvol_10m"))
+        lines.append(f"{sym} {mov:>8} {n10:>8} {rv:>5}")
     text = "\n".join(lines)
     if len(text) > _MOC_FIELD_MAX:
         text = text[: _MOC_FIELD_MAX - 3] + "..."
@@ -1157,14 +1182,19 @@ def _moc_block_350(rows: list[dict]) -> str:
 def _moc_block_refined(rows: list[dict]) -> str:
     if not rows:
         return "*None (no trade-refined rows).*"
-    lines = [f"{'Sym':<6} {'Trades%':>9} {'1mO/C%':>9}", "-" * 25]
+    lines = [
+        f"{'Sym':<6} {'T%':>7} {'1m%':>7} {'$10m':>8} {'RV10':>5}",
+        "-" * 36,
+    ]
     for r in rows:
         sym = (r.get("ticker") or "?")[:6].ljust(6)
         tr = r.get("pct_refined")
         px = r.get("pct_1m_proxy")
-        a = f"{tr:+.2f}%" if tr is not None else "—"
-        b = f"{px:+.2f}%" if px is not None else "—"
-        lines.append(f"{sym} {a:>9} {b:>9}")
+        a = f"{tr:+.2f}%" if tr is not None else f"{'—':>7}"
+        b = f"{px:+.2f}%" if px is not None else f"{'—':>7}"
+        n10 = _moc_fmt_notional(r.get("notional_10m"))
+        rv = _moc_fmt_rvol(r.get("rvol_10m"))
+        lines.append(f"{sym} {a:>7} {b:>7} {n10:>8} {rv:>5}")
     text = "\n".join(lines)
     if len(text) > _MOC_FIELD_MAX:
         text = text[: _MOC_FIELD_MAX - 3] + "..."
@@ -1174,11 +1204,17 @@ def _moc_block_refined(rows: list[dict]) -> str:
 def _moc_block_1m(rows: list[dict]) -> str:
     if not rows:
         return "*None.*"
-    lines = [f"{'Sym':<6} {'1m O/C%':>9}", "-" * 17]
+    lines = [
+        f"{'Sym':<6} {'1m O/C%':>8} {'$10m':>8} {'RV10':>5}",
+        "-" * 31,
+    ]
     for r in rows:
         sym = (r.get("ticker") or "?")[:6].ljust(6)
         px = r.get("pct_1m_proxy")
-        lines.append(f"{sym} {px:+.2f}%" if px is not None else f"{sym} {'—':>9}")
+        mov = f"{px:+.2f}%" if px is not None else f"{'—':>8}"
+        n10 = _moc_fmt_notional(r.get("notional_10m"))
+        rv = _moc_fmt_rvol(r.get("rvol_10m"))
+        lines.append(f"{sym} {mov:>8} {n10:>8} {rv:>5}")
     text = "\n".join(lines)
     if len(text) > _MOC_FIELD_MAX:
         text = text[: _MOC_FIELD_MAX - 3] + "..."
@@ -1199,7 +1235,7 @@ def _moc_copy_symbols(report: dict) -> str:
 
 @tree.command(
     name="top_moc_movers",
-    description="Largest moves into the 4:00 PM ET close (Massive minute + trade refinement).",
+    description="MOC: last-10m notional + 10m RVOL + moves into 4:00 PM ET (Massive).",
 )
 @app_commands.describe(
     session_date="Trading session YYYY-MM-DD (default: last completed session)",
@@ -1243,9 +1279,11 @@ async def top_moc_movers_command(
         return
 
     desc = (
-        f"**Session** `{report['session']}` (ET) · **Universe** {report['universe_size']} (liquid by prior-day vol cap) · "
-        f"**Minute OK** {report['minute_ok']} · **Refine pool** {report['refine_candidates']} (top |1m| for trades)\n"
-        "**3:50→4:00** = close(3:50 bar) → close(3:59 bar). **Trades** = last print ≤3:59:45 vs last ≤4:00:00 (see README). **1m O/C** = last RTH minute bar."
+        f"**Session** `{report['session']}` (ET) · **Universe** {report['universe_size']} (see README: dollar-vol, filters) · "
+        f"**$10m pool** {report.get('rvol_pool', 0)} · **RV lookback** {report.get('rvol_lookback', '—')} sessions · "
+        f"**Gated** {report.get('gated_pre_rvol', '—')}\n"
+        "**$10m** = Σ(v×close) 3:50–3:59 PM ET. **RV10** = last-10m share vol ÷ avg same window on prior RTH days (≥2). "
+        "Leaderboards: **|move| × (1+log $10m) × RV10** (see README). **3:50→3:59** close / **1m** last RTH bar / **trades** 3:59:45→4:00."
     )
     embed = discord.Embed(
         title="Top MOC movers",
@@ -1253,22 +1291,22 @@ async def top_moc_movers_command(
         color=0x06B6D4,
     )
     embed.add_field(
-        name="Largest |move| — 3:50 close → 4:00 close",
+        name="3:50→3:59 close / close (composite score, $10m, RV10)",
         value=_moc_block_350(report.get("top_350_400") or [])[:1024],
         inline=False,
     )
     embed.add_field(
-        name="Trades — 3:59:45 → ~4:00 (refined from top |last-minute 1m|)",
+        name="Trades 3:59:45 → ~4:00 (top composite 1m proxy pool)",
         value=_moc_block_refined(report.get("top_refined") or [])[:1024],
         inline=False,
     )
     embed.add_field(
-        name="Last RTH minute — 1m bar open → close (proxy)",
+        name="Last RTH minute — 1m O/C (proxy, composite score)",
         value=_moc_block_1m(report.get("top_1m_proxy") or [])[:1024],
         inline=False,
     )
     embed.set_footer(
-        text="Massive/Polygon · MOC_MAX_TICKERS env · FinViz not required"
+        text="Massive · MOC_MAX_TICKERS, MOC_MIN_NOTIONAL_10M, MOC_MIN_RVOL_10M, MOC_RVOL_CANDIDATES, … (README)"
     )
     await interaction.followup.send(embed=embed)
     csv = _moc_copy_symbols(report)
