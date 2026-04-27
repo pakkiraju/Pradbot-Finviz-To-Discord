@@ -21,8 +21,8 @@ from finviz_earnings import (
 from finviz_inplay import _fmt_float_shares_display
 from massive_rest import (
     fetch_daily_bars,
+    fetch_minute_bars,
     get_massive_api_key,
-    sum_minute_volume,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,80 @@ def _et_range_ms(day: date, h1: int, m1: int, h2: int, m2: int) -> tuple[int, in
     start = datetime(day.year, day.month, day.day, h1, m1, tzinfo=ET)
     end = datetime(day.year, day.month, day.day, h2, m2, tzinfo=ET)
     return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+def _et_bar_start_date_and_mins(t_ms: int) -> tuple[date, int]:
+    """Bar *start* in America/New_York: calendar day and minutes since local midnight (0..1439)."""
+    dt = datetime.fromtimestamp(t_ms / 1000, tz=ET)
+    return dt.date(), dt.hour * 60 + dt.minute
+
+
+def _eavol_premarket_includes(t_ms: int, current_d: date) -> bool:
+    """
+    4:00–9:29 AM ET on *current_d* only. Excludes the 9:30 print (first regular-session minute);
+    we never add RTH volume to EAVOL.
+    """
+    d, mins = _et_bar_start_date_and_mins(t_ms)
+    if d != current_d:
+        return False
+    return 4 * 60 <= mins < 9 * 60 + 30
+
+
+def _eavol_afterhours_includes(t_ms: int, prior_d: date) -> bool:
+    """
+    4:00–7:59 PM ET on *prior_d* only. After-hours for overnight earnings, no regular session.
+    """
+    d, mins = _et_bar_start_date_and_mins(t_ms)
+    if d != prior_d:
+        return False
+    return 16 * 60 <= mins < 20 * 60
+
+
+def _sum_eavol_premarket(
+    ticker: str,
+    current_d: date,
+    pm_lo: int,
+    pm_hi: int,
+    *,
+    caller: str,
+) -> float:
+    """
+    Pre-market for EAVOL. Sum grows until ~9:30 AM ET (missing future minutes) but never includes RTH.
+    """
+    if pm_lo >= pm_hi:
+        return 0.0
+    total = 0.0
+    for b in fetch_minute_bars(ticker, pm_lo, pm_hi, caller=caller):
+        t = b.get("t")
+        if t is None:
+            continue
+        t_ms = int(t)
+        if not _eavol_premarket_includes(t_ms, current_d):
+            continue
+        v = b.get("v")
+        if v is not None:
+            total += float(v)
+    return total
+
+
+def _sum_eavol_afterhours(
+    ticker: str, prior_d: date, ah_lo: int, ah_hi: int, *, caller: str
+) -> float:
+    """After-hours for EAVOL: prior session date only, [16:00, 20:00) ET in clock terms."""
+    if ah_lo >= ah_hi:
+        return 0.0
+    total = 0.0
+    for b in fetch_minute_bars(ticker, ah_lo, ah_hi, caller=caller):
+        t = b.get("t")
+        if t is None:
+            continue
+        t_ms = int(t)
+        if not _eavol_afterhours_includes(t_ms, prior_d):
+            continue
+        v = b.get("v")
+        if v is not None:
+            total += float(v)
+    return total
 
 
 def _avg_daily_volume_21(ticker: str, et_today: date) -> float | None:
@@ -431,6 +505,8 @@ def _enrich_one_ticker(
     *,
     ticker: str,
     et_today: date,
+    prior_d: date,
+    current_d: date,
     ah_lo: int,
     ah_hi: int,
     pm_lo: int,
@@ -450,14 +526,18 @@ def _enrich_one_ticker(
         avg = _avg_daily_volume_21(ticker, et_today)
         if avg is None or avg <= 0:
             return out
-        ah = sum_minute_volume(ticker, ah_lo, ah_hi, caller=f"eavol_ah_{ticker}")
-        pm = sum_minute_volume(ticker, pm_lo, pm_hi, caller=f"eavol_pm_{ticker}")
+        ah = _sum_eavol_afterhours(
+            ticker, prior_d, ah_lo, ah_hi, caller=f"eavol_ah_{ticker}"
+        )
+        pm = _sum_eavol_premarket(
+            ticker, current_d, pm_lo, pm_hi, caller=f"eavol_pm_{ticker}"
+        )
         ed_raw = (normed.get("earnings_date") or "").strip() or _cell_from_raw(
             raw, "Earnings Date", "Earnings"
         )
         sess_order, _ = _classify_earnings_session(ed_raw)
-        # BMO (today pre-market): only today's pre-market vs 21d ADV — exclude prior AH.
-        # AMC (yesterday after-hours) or unknown: prior AH + today PM (unchanged).
+        # BMO (today pre-market): only today's pre-market vs 21d ADV — no prior AH.
+        # AMC (yesterday after-hours) or unknown: prior day AH + current session pre-market; never RTH.
         ext = pm if sess_order == 0 else ah + pm
         out["pct_eavol"] = (ext / avg) * 100.0
     except Exception as e:
@@ -510,6 +590,8 @@ def fetch_inplay_earnings_rows() -> tuple[list[dict[str, Any]], str]:
                 normed,
                 ticker=t,
                 et_today=et_day,
+                prior_d=prior_d,
+                current_d=current_d,
                 ah_lo=ah_lo,
                 ah_hi=ah_hi,
                 pm_lo=pm_lo,
